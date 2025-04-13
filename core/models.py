@@ -27,3 +27,51 @@ class Message(models.Model):
 
     def __str__(self):
         return f"{self.subject} (status: {self.status})"
+
+import uuid
+
+class RainGullStandardMessage(models.Model):
+    raingull_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    
+    processing_status = models.CharField(max_length=20, choices=[
+        ('new', 'New'),
+        ('queued', 'Queued'),
+        ('sending', 'Sending'),
+        ('distributed', 'Distributed'),
+        ('failed', 'Failed'),
+    ], default='new')
+    
+    origin_service_id = models.CharField(max_length=100)
+    message_type = models.CharField(max_length=20, choices=[
+        ('email', 'Email'),
+        ('sms', 'SMS'),
+        ('telegram', 'Telegram'),
+        ('discord', 'Discord'),
+        ('signal', 'Signal'),
+        ('whatsapp', 'WhatsApp'),
+        ('slack', 'Slack'),
+        ('teams', 'Teams'),
+        ('other', 'Other'),
+    ], default='other')
+
+    sent_timestamp = models.DateTimeField(null=True, blank=True)
+    received_timestamp = models.DateTimeField(auto_now_add=True)
+    processed_timestamp = models.DateTimeField(auto_now_add=True)
+
+    original_sender = models.CharField(max_length=255)
+    original_sender_name = models.CharField(max_length=255, null=True, blank=True)
+    original_recipient_list = models.JSONField(null=True, blank=True)
+
+    member_display_name = models.CharField(max_length=255, null=True, blank=True)
+
+    subject = models.CharField(max_length=255, null=True, blank=True)
+    snippet = models.CharField(max_length=255, null=True, blank=True)
+    message_body = models.TextField()
+
+    additional_headers = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        db_table = "rg_standard_messages"
+
+    def __str__(self):
+        return f"{self.raingull_id} | {self.message_type} | {self.processing_status}"
