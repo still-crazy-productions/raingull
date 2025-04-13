@@ -14,6 +14,7 @@
   - `core` (for user management, plugin management, logging, message queues).
   - `email_plugin` within the `plugins` directory (for IMAP & SMTP email handling).
 - Opened the project successfully in VS Code.
+- Initialized a new Git repository and pushed to GitHub under `still-crazy-productions/raingull`.
 
 **Current Project Structure:**
 ```
@@ -46,23 +47,9 @@ raingull/
 ```
 
 ## Next Steps
-- Configure Django settings (`raingull/settings.py`) by adding:
-  ```python
-  INSTALLED_APPS = [
-      'django.contrib.admin',
-      'django.contrib.auth',
-      'django.contrib.contenttypes',
-      'django.contrib.sessions',
-      'django.contrib.messages',
-      'django.contrib.staticfiles',
-      'core',
-      'plugins.email_plugin',
-  ]
-  ```
-- Begin designing the plugin architecture and core functionality:
-  - Define basic models in the `core` app.
-  - Establish an initial interface for plugins.
-  - Implement basic IMAP/SMTP handling in `email_plugin`.
+- Define initial data models in the `core` app (User Profile, Plugin Registration, Message Queue).
+- Outline the plugin architecture and initial interfaces.
+- Begin development of IMAP/SMTP handling in `email_plugin`.
 
 ---
 
@@ -70,4 +57,5 @@ raingull/
 - Avoid using global Python/Django installations (`sudo`, `pipx`) within virtual environments.
 - Always activate your virtual environment before running Django-related commands.
 - Document issues and their resolutions clearly in this log for future reference.
+- Keep the Git repository regularly updated with meaningful commits.
 

@@ -40,7 +40,7 @@ INSTALLED_APPS = [
 
     #My Apps
     'core',
-    'plugins.email_plugin',
+    'plugins.email_plugin.apps.EmailPluginConfig',
 ]
 
 MIDDLEWARE = [
