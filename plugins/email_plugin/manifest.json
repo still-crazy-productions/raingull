@@ -1,0 +1,19 @@
+{
+  "plugin_name": "Email Plugin",
+  "description": "RainGull unified Email plugin for IMAP and SMTP.",
+  "version": "0.2",
+  "incoming": true,
+  "outgoing": true,
+  "config_fields": [
+    {"name": "service_name", "type": "string", "label": "Unique Service Name", "required": true},
+    {"name": "imap_server", "type": "string", "label": "IMAP Server URL", "required": true},
+    {"name": "imap_port", "type": "integer", "label": "IMAP Server Port", "default": 993, "required": true},
+    {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["None", "STARTTLS", "SSL/TLS"], "default": "SSL/TLS", "required": true},
+    {"name": "username", "type": "string", "label": "Email Username", "required": true},
+    {"name": "password", "type": "password", "label": "Email Password", "required": true},
+    {"name": "poll_frequency", "type": "integer", "label": "Polling Frequency (minutes)", "default": 5, "required": false},
+    {"name": "imap_inbox", "type": "string", "label": "IMAP Inbox Folder", "default": "INBOX", "required": true},
+    {"name": "imap_processed_folder", "type": "string", "label": "IMAP Processed Folder", "default": "INBOX/Processed", "required": true},
+    {"name": "imap_rejected_folder", "type": "string", "label": "IMAP Rejected Folder", "default": "INBOX/Rejected", "required": true}
+  ]
+}

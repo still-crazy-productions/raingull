@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>Service Instances</h1>
+
+<a href="{% url 'core:service_instance_add' %}">Add New Service Instance</a>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Plugin</th>
+            <th>Active</th>
+            <th>Edit</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for instance in instances %}
+            <tr>
+                <td>{{ instance.name }}</td>
+                <td>{{ instance.plugin.name }}</td>
+                <td>{{ instance.active }}</td>
+                <td><a href="{% url 'core:service_instance_edit' instance.id %}">Edit</a></td>
+            </tr>
+        {% empty %}
+            <tr><td colspan="4">No service instances configured.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

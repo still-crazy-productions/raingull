@@ -75,3 +75,12 @@ class RainGullStandardMessage(models.Model):
 
     def __str__(self):
         return f"{self.raingull_id} | {self.message_type} | {self.processing_status}"
+
+class ServiceInstance(models.Model):
+    plugin = models.ForeignKey('Plugin', on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    active = models.BooleanField(default=True)
+    configuration = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.plugin.name})"
