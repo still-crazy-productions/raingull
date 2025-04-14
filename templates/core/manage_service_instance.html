@@ -9,5 +9,55 @@
 
     <button type="submit">Save</button>
     <a href="{% url 'core:service_instance_list' %}">Cancel</a>
+
+    <button type="button" id="test-connection">Test IMAP Connection</button>
+    <div id="connection-status"></div>
 </form>
+
+<script>
+document.getElementById('test-connection').addEventListener('click', function(event) {
+    event.preventDefault();
+    
+    let imap_server_field = document.querySelector('[name="config_imap_server"]');
+    let imap_port_field = document.querySelector('[name="config_imap_port"]');
+    let username_field = document.querySelector('[name="config_username"]');
+    let password_field = document.querySelector('[name="config_password"]');
+    let encryption_field = document.querySelector('[name="config_encryption"]');
+
+    if (!imap_server_field || !imap_port_field || !username_field || !password_field || !encryption_field) {
+        document.getElementById('connection-status').innerHTML = `<span style="color: red;">Missing required fields.</span>`;
+        return;
+    }
+
+    let data = {
+        imap_server: imap_server_field.value,
+        imap_port: imap_port_field.value,
+        username: username_field.value,
+        password: password_field.value,
+        encryption: encryption_field.value
+    };
+
+    fetch('{% url "core:test_imap_connection" %}', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        let statusDiv = document.getElementById('connection-status');
+        if (result.success) {
+            statusDiv.innerHTML = `<span style="color: green;">Success: ${result.message}</span>`;
+        } else {
+            statusDiv.innerHTML = `<span style="color: red;">Failed: ${result.message}</span>`;
+        }
+    })
+    .catch(error => {
+        document.getElementById('connection-status').innerHTML = `<span style="color: red;">Error: ${error}</span>`;
+    });
+});
+</script>
+
 {% endblock %}
