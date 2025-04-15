@@ -1,99 +1,139 @@
 from django.contrib import admin
 from django import forms
-from .models import UserProfile, Plugin, Message, RainGullStandardMessage, ServiceInstance
+from .models import UserProfile, Plugin, Message, RainGullStandardMessage, ServiceInstance, PluginInstance
 import json
 from pathlib import Path
+from .forms import ServiceInstanceForm
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 class DynamicServiceInstanceAdminForm(forms.ModelForm):
     class Meta:
         model = ServiceInstance
-        fields = ['name', 'plugin', 'enabled']
+        fields = '__all__'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        self.fields['plugin'].queryset = Plugin.objects.filter(enabled=True)
-
-        plugin_instance = None
         if 'plugin' in self.data:
             try:
                 plugin_id = int(self.data.get('plugin'))
-                plugin_instance = Plugin.objects.get(pk=plugin_id)
+                plugin = Plugin.objects.get(id=plugin_id)
+                manifest = plugin.get_manifest()
+                if manifest and 'config_fields' in manifest:
+                    for field in manifest['config_fields']:
+                        field_name = f"config_{field['name']}"
+                        if field['type'] == 'select':
+                            self.fields[field_name] = forms.ChoiceField(
+                                choices=[(opt, opt) for opt in field['options']],
+                                required=field.get('required', False),
+                                initial=field.get('default', '')
+                            )
+                        elif field['type'] == 'integer':
+                            self.fields[field_name] = forms.IntegerField(
+                                required=field.get('required', False),
+                                initial=field.get('default', 0)
+                            )
+                        elif field['type'] == 'password':
+                            self.fields[field_name] = forms.CharField(
+                                widget=forms.PasswordInput(),
+                                required=field.get('required', False)
+                            )
+                        else:  # string, text, etc.
+                            self.fields[field_name] = forms.CharField(
+                                required=field.get('required', False),
+                                initial=field.get('default', '')
+                            )
             except (ValueError, Plugin.DoesNotExist):
                 pass
-        elif self.instance and self.instance.plugin:
-            plugin_instance = self.instance.plugin
 
-        if plugin_instance:
-            manifest_path = BASE_DIR / "plugins" / plugin_instance.name / "manifest.json"
-            if manifest_path.exists():
-                with open(manifest_path, 'r') as file:
-                    manifest = json.load(file)
-
-                for field_def in manifest.get('config_fields', []):
-                    field_name = field_def['name']
-                    field_type = field_def['type']
-                    required = field_def.get('required', False)
-                    initial = self.instance.configuration.get(field_name, field_def.get('default')) if self.instance.configuration else field_def.get('default')
-                    help_text = field_def.get('label', '')
-
-                    if field_type == 'string':
-                        field = forms.CharField(required=required, initial=initial, help_text=help_text)
-                    elif field_type == 'integer':
-                        field = forms.IntegerField(required=required, initial=initial, help_text=help_text)
-                    elif field_type == 'password':
-                        field = forms.CharField(required=required, widget=forms.PasswordInput, help_text=help_text)
-                    elif field_type == 'select':
-                        options = field_def.get('options', [])
-                        field = forms.ChoiceField(choices=[(opt, opt) for opt in options], required=required, initial=initial, help_text=help_text)
-                    else:
-                        continue
-
-                    self.fields[f'config_{field_name}'] = field
+    def clean(self):
+        cleaned_data = super().clean()
+        plugin = cleaned_data.get('plugin')
+        if plugin:
+            manifest = plugin.get_manifest()
+            if manifest and 'config_fields' in manifest:
+                config = {}
+                for field in manifest['config_fields']:
+                    field_name = f"config_{field['name']}"
+                    if field_name in cleaned_data:
+                        config[field['name']] = cleaned_data[field_name]
+                cleaned_data['config'] = config
+        return cleaned_data
 
     def save(self, commit=True):
         instance = super().save(commit=False)
-        config_fields = {k.replace('config_', ''): v for k, v in self.cleaned_data.items() if k.startswith('config_')}
-        instance.configuration = config_fields
         if commit:
             instance.save()
         return instance
 
+class PluginForm(forms.ModelForm):
+    class Meta:
+        model = Plugin
+        fields = ['name', 'friendly_name', 'version', 'enabled']
+
+class PluginInstanceInline(admin.StackedInline):
+    model = PluginInstance
+    can_delete = False
+    verbose_name_plural = 'Plugin Instance'
+    fields = ('app_config', 'is_active')
+    readonly_fields = ('app_config',)
+
+@admin.register(ServiceInstance)
 class ServiceInstanceAdmin(admin.ModelAdmin):
-    form = DynamicServiceInstanceAdminForm
-    list_display = ['name', 'plugin', 'enabled']
-    list_filter = ['plugin', 'enabled']
+    form = ServiceInstanceForm
+    list_display = ('name', 'plugin', 'incoming_status', 'outgoing_status', 'created_at')
+    list_filter = ('plugin', 'incoming_enabled', 'outgoing_enabled')
+    search_fields = ('name', 'plugin__name', 'plugin__friendly_name')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    def incoming_status(self, obj):
+        if not obj.plugin.get_manifest().get('capabilities', {}).get('incoming', False):
+            return 'Not Supported'
+        return 'Enabled' if obj.incoming_enabled else 'Disabled'
+    incoming_status.short_description = 'Incoming'
 
-    def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
-        return form
+    def outgoing_status(self, obj):
+        if not obj.plugin.get_manifest().get('capabilities', {}).get('outgoing', False):
+            return 'Not Supported'
+        return 'Enabled' if obj.outgoing_enabled else 'Disabled'
+    outgoing_status.short_description = 'Outgoing'
+    
+    fieldsets = (
+        ('General', {
+            'fields': ('name', 'plugin')
+        }),
+        ('Configuration', {
+            'fields': ('config',)
+        }),
+        ('Status', {
+            'fields': ('incoming_enabled', 'outgoing_enabled')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
-    def get_fieldsets(self, request, obj=None):
-        basic_fields = ['name', 'plugin', 'enabled']
-        dynamic_fields = []
+    def get_readonly_fields(self, request, obj=None):
+        if obj:
+            manifest = obj.plugin.get_manifest()
+            capabilities = manifest.get('capabilities', {})
+            readonly = list(super().get_readonly_fields(request, obj))
+            if not capabilities.get('outgoing', False):
+                readonly.append('outgoing_enabled')
+            if not capabilities.get('incoming', False):
+                readonly.append('incoming_enabled')
+            return readonly
+        return super().get_readonly_fields(request, obj)
 
-        if obj and obj.plugin:
-            manifest_path = BASE_DIR / "plugins" / obj.plugin.name / "manifest.json"
-            if manifest_path.exists():
-                with open(manifest_path, 'r') as file:
-                    manifest = json.load(file)
-                    dynamic_fields = [f'config_{field["name"]}' for field in manifest.get('config_fields', [])]
-
-        fieldsets = [("Basic Information", {'fields': basic_fields})]
-        if dynamic_fields:
-            fieldsets.append(("Plugin Configuration", {'fields': dynamic_fields}))
-
-        return fieldsets
-
+@admin.register(Plugin)
 class PluginAdmin(admin.ModelAdmin):
-    list_display = ['name', 'enabled']
-    list_filter = ['enabled']
-    fields = ['name', 'enabled']
+    form = PluginForm
+    list_display = ('name', 'friendly_name', 'version', 'enabled')
+    list_filter = ('enabled',)
+    search_fields = ('name', 'friendly_name')
+    fields = ('name', 'friendly_name', 'version', 'enabled')
 
 admin.site.register(UserProfile)
-admin.site.register(Plugin, PluginAdmin)
 admin.site.register(Message)
 admin.site.register(RainGullStandardMessage)
-admin.site.register(ServiceInstance, ServiceInstanceAdmin)

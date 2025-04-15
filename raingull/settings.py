@@ -30,6 +30,13 @@ ALLOWED_HOSTS = []
 
 # Application definition
 
+# Get active plugin instances
+try:
+    from core.models import PluginInstance
+    PLUGIN_APPS = [pi.app_config for pi in PluginInstance.objects.filter(is_active=True)]
+except:
+    PLUGIN_APPS = []
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -37,11 +44,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
-    #My Apps
     'core',
-    'plugins.imap_plugin.apps.ImapPluginConfig',
-    'plugins.smtp_plugin.apps.SmtpPluginConfig',]
+] + PLUGIN_APPS
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

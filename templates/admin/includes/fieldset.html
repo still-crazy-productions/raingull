@@ -1,0 +1,62 @@
+{% load i18n admin_urls static admin_modify %}
+{% if adminform and add %}
+    <fieldset class="module aligned {{ fieldset.classes }}">
+        <h2>{% translate "Basic Information" %}</h2>
+        {% for field in adminform %}
+            {% if field.field.name in 'name,plugin' %}
+                <div class="form-row{% if field.field.name %} field-{{ field.field.name }}{% endif %}">
+                    {% if field.field.name == 'plugin' %}
+                        <div>
+                            <label for="{{ field.field.id_for_label }}">{{ field.field.label }}</label>
+                            {{ field.field }}
+                            {% if field.field.help_text %}
+                                <div class="help">{{ field.field.help_text|safe }}</div>
+                            {% endif %}
+                        </div>
+                    {% else %}
+                        {{ field.field.errors.as_ul }}
+                        {{ field.label_tag }}
+                        {{ field.field }}
+                        {% if field.field.help_text %}
+                            <div class="help">{{ field.field.help_text|safe }}</div>
+                        {% endif %}
+                    {% endif %}
+                </div>
+            {% endif %}
+        {% endfor %}
+    </fieldset>
+
+    <fieldset class="module aligned {{ fieldset.classes }}">
+        <h2>{% translate "Service Status" %}</h2>
+        {% for field in adminform %}
+            {% if field.field.name in 'incoming_enabled,outgoing_enabled' %}
+                <div class="form-row{% if field.field.name %} field-{{ field.field.name }}{% endif %}">
+                    {{ field.field.errors.as_ul }}
+                    {{ field.label_tag }}
+                    {{ field.field }}
+                    {% if field.field.help_text %}
+                        <div class="help">{{ field.field.help_text|safe }}</div>
+                    {% endif %}
+                </div>
+            {% endif %}
+        {% endfor %}
+    </fieldset>
+
+    <fieldset class="module aligned {{ fieldset.classes }}">
+        <h2>{% translate "Configuration" %}</h2>
+        {% for field in adminform %}
+            {% if field.field.name|slice:":7" == "config_" %}
+                <div class="form-row{% if field.field.name %} field-{{ field.field.name }}{% endif %}">
+                    {{ field.field.errors.as_ul }}
+                    {{ field.label_tag }}
+                    {{ field.field }}
+                    {% if field.field.help_text %}
+                        <div class="help">{{ field.field.help_text|safe }}</div>
+                    {% endif %}
+                </div>
+            {% endif %}
+        {% endfor %}
+    </fieldset>
+{% else %}
+    {% include "admin/includes/fieldset.html" %}
+{% endif %} 

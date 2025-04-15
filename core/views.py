@@ -3,7 +3,7 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from core.models import ServiceInstance, Plugin
-from core.forms import DynamicServiceInstanceForm
+from core.forms import DynamicServiceInstanceForm, ServiceInstanceForm
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.module_loading import import_string
@@ -113,19 +113,26 @@ def create_service_instance(request):
 @user_passes_test(lambda u: u.is_superuser)
 def manage_service_instance(request, instance_id=None):
     instance = get_object_or_404(ServiceInstance, pk=instance_id) if instance_id else None
-    plugin_name = request.GET.get('plugin') if not instance else instance.plugin.name
-    template_name = f'{plugin_name}/manage_service_instance.html'
-
+    
+    # Get the plugin manifest to check capabilities
+    manifest = instance.plugin.get_manifest() if instance else None
+    
+    # Create the form with the instance data
     form = DynamicServiceInstanceForm(request.POST or None, instance=instance)
-
+    
+    # If plugin doesn't support outgoing, remove the outgoing_enabled field
+    if manifest and not manifest.get('outgoing', False):
+        form.fields.pop('outgoing_enabled', None)
+    
     if request.method == 'POST' and form.is_valid():
         form.save()
         messages.success(request, 'Service instance saved successfully.')
         return redirect('core:service_instance_list')
 
-    return render(request, template_name, {
+    return render(request, 'core/manage_service_instance.html', {
         'form': form,
         'instance': instance,
+        'manifest': manifest,
     })
 
 @login_required

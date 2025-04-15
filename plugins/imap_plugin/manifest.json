@@ -1,70 +1,32 @@
 {
   "plugin_name": "IMAP Plugin",
-  "description": "Plugin for handling incoming emails via IMAP protocol.",
+  "description": "RainGull IMAP Plugin for receiving emails.",
   "version": "0.1",
   "incoming": true,
   "outgoing": false,
   "config_fields": [
-    {
-      "name": "imap_server",
-      "type": "string",
-      "label": "IMAP Server URL",
-      "required": true
-    },
-    {
-      "name": "imap_port",
-      "type": "integer",
-      "label": "IMAP Server Port",
-      "default": 993,
-      "required": true
-    },
-    {
-      "name": "encryption",
-      "type": "select",
-      "label": "Encryption Type",
-      "options": ["None", "STARTTLS", "SSL/TLS"],
-      "default": "SSL/TLS",
-      "required": true
-    },
-    {
-      "name": "username",
-      "type": "string",
-      "label": "IMAP Username",
-      "required": true
-    },
-    {
-      "name": "password",
-      "type": "password",
-      "label": "IMAP Password",
-      "required": true
-    },
-    {
-      "name": "poll_frequency",
-      "type": "integer",
-      "label": "Polling Frequency (minutes)",
-      "default": 5,
-      "required": false
-    },
-    {
-      "name": "imap_inbox",
-      "type": "string",
-      "label": "IMAP Inbox Folder",
-      "default": "INBOX",
-      "required": true
-    },
-    {
-      "name": "imap_processed_folder",
-      "type": "string",
-      "label": "IMAP Processed Folder",
-      "default": "INBOX/Processed",
-      "required": true
-    },
-    {
-      "name": "imap_rejected_folder",
-      "type": "string",
-      "label": "IMAP Rejected Folder",
-      "default": "INBOX/Rejected",
-      "required": true
+    {"name": "imap_server", "type": "string", "label": "IMAP Server URL", "required": true},
+    {"name": "imap_port", "type": "integer", "label": "IMAP Server Port", "default": 993, "required": true},
+    {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["None", "STARTTLS", "SSL/TLS"], "default": "SSL/TLS", "required": true},
+    {"name": "username", "type": "string", "label": "IMAP Username", "required": true},
+    {"name": "password", "type": "password", "label": "IMAP Password", "required": true},
+    {"name": "imap_inbox_folder", "type": "string", "label": "IMAP Inbox Folder", "default": "INBOX", "required": true},
+    {"name": "poll_frequency", "type": "integer", "label": "Polling Frequency (minutes)", "default": 5, "required": false},
+    {"name": "imap_processed_folder", "type": "string", "label": "IMAP Processed Folder", "default": "INBOX/Processed", "required": true},
+    {"name": "imap_rejected_folder", "type": "string", "label": "IMAP Rejected Folder", "default": "INBOX/Rejected", "required": true}
+  ],
+  "message_schemas": {
+    "incoming": {
+      "message_id": {"type": "CharField", "max_length": 255, "required": true},
+      "subject": {"type": "CharField", "max_length": 255, "required": true},
+      "from": {"type": "CharField", "max_length": 255, "required": true},
+      "to": {"type": "CharField", "max_length": 255, "required": true},
+      "date": {"type": "DateTimeField", "required": true},
+      "body": {"type": "TextField", "required": true},
+      "attachments": {"type": "JSONField", "required": false},
+      "headers": {"type": "JSONField", "required": false},
+      "status": {"type": "CharField", "max_length": 20, "required": true, "default": "new"},
+      "processed_at": {"type": "DateTimeField", "required": false}
     }
-  ]
+  }
 }

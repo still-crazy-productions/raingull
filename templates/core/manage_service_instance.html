@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Manage Service Instance{% endblock %}
+
+{% block head %}
+{{ block.super }}
+{% if manifest.incoming %}
+<script>
+function debug(message) {
+    console.log(message);
+    const debugOutput = document.getElementById('debugOutput');
+    const debugText = document.getElementById('debugText');
+    debugOutput.style.display = 'block';
+    debugText.textContent += message + '\n';
+}
+
+function testConnection() {
+    debug('Test connection button clicked');
+    
+    const form = document.getElementById('serviceForm');
+    if (!form) {
+        debug('Form not found!');
+        return;
+    }
+    
+    const formData = new FormData(form);
+    const config = {};
+    
+    debug('Form data:');
+    for (const [key, value] of formData.entries()) {
+        debug(`${key}: ${value}`);
+        if (key.startsWith('config_')) {
+            config[key.replace('config_', '')] = value;
+        }
+    }
+    
+    debug('Sending request...');
+    
+    fetch(`/core/services/test/{{ instance.plugin.name }}/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        },
+        body: JSON.stringify(config)
+    })
+    .then(response => {
+        debug(`Response status: ${response.status}`);
+        return response.json();
+    })
+    .then(data => {
+        debug(`Response data: ${JSON.stringify(data)}`);
+        if (data.success) {
+            alert('Connection test successful!');
+        } else {
+            alert('Connection test failed: ' + data.message);
+        }
+    })
+    .catch(error => {
+        debug('Error: ' + error.message);
+        alert('Error testing connection: ' + error.message);
+    });
+}
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    debug('Page loaded');
+    const testConnectionBtn = document.getElementById('testConnectionBtn');
+    if (testConnectionBtn) {
+        debug('Test connection button found');
+        testConnectionBtn.addEventListener('click', testConnection);
+    } else {
+        debug('Test connection button not found');
+    }
+});
+</script>
+{% else %}
+<script>
+function debug(message) {
+    console.log(message);
+    const debugOutput = document.getElementById('debugOutput');
+    const debugText = document.getElementById('debugText');
+    debugOutput.style.display = 'block';
+    debugText.textContent += message + '\n';
+}
+debug('Test connection not available for this plugin');
+</script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Manage Service Instance</h1>
+    
+    <div class="card">
+        <div class="card-body">
+            <form method="post" id="serviceForm">
+                {% csrf_token %}
+                
+                <div class="mb-3">
+                    <label for="{{ form.name.id_for_label }}" class="form-label">Name</label>
+                    {{ form.name }}
+                    {% if form.name.errors %}
+                        <div class="invalid-feedback d-block">
+                            {{ form.name.errors }}
+                        </div>
+                    {% endif %}
+                </div>
+
+                <div class="mb-3">
+                    <label for="{{ form.incoming_enabled.id_for_label }}" class="form-label">Incoming Enabled</label>
+                    {{ form.incoming_enabled }}
+                    {% if form.incoming_enabled.errors %}
+                        <div class="invalid-feedback d-block">
+                            {{ form.incoming_enabled.errors }}
+                        </div>
+                    {% endif %}
+                </div>
+
+                {% if form.outgoing_enabled %}
+                <div class="mb-3">
+                    <label for="{{ form.outgoing_enabled.id_for_label }}" class="form-label">Outgoing Enabled</label>
+                    {{ form.outgoing_enabled }}
+                    {% if form.outgoing_enabled.errors %}
+                        <div class="invalid-feedback d-block">
+                            {{ form.outgoing_enabled.errors }}
+                        </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
+                {% for field in form %}
+                    {% if field.name|slice:":7" == "config_" %}
+                        <div class="mb-3">
+                            <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.errors %}
+                                <div class="invalid-feedback d-block">
+                                    {{ field.errors }}
+                                </div>
+                            {% endif %}
+                            {% if field.help_text %}
+                                <div class="form-text">{{ field.help_text }}</div>
+                            {% endif %}
+                            {% if field.name == "config_password" %}
+                                <div class="form-text text-warning">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                    Note: You will need to re-enter the password to test the connection.
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+
+                <div class="d-flex justify-content-between">
+                    <a href="{% url 'core:service_instance_list' %}" class="btn btn-secondary">Cancel</a>
+                    <div>
+                        {% if manifest.incoming %}
+                            <button type="button" class="btn btn-info me-2" id="testConnectionBtn">Test Connection</button>
+                        {% endif %}
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Debug info -->
+<div class="mt-4">
+    <pre>Debug Info:
+Plugin: {{ instance.plugin.name }}
+Has Test Connection: {{ manifest.incoming }}
+Fields: {{ form.fields|length }}
+</pre>
+</div>
+
+<!-- Debug output -->
+<div id="debugOutput" class="mt-4 p-3 bg-light border rounded">
+    <h5>Debug Output</h5>
+    <pre id="debugText">Initializing...</pre>
+</div>
+{% endblock %} 
