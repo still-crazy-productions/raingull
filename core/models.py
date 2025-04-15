@@ -11,11 +11,11 @@ class UserProfile(models.Model):
 
 class Plugin(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    friendly_name = models.CharField(max_length=100)
+    friendly_name = models.CharField(max_length=100, blank=True, null=True)
     enabled = models.BooleanField(default=True)
 
     def __str__(self):
-        return self.friendly_name
+        return self.friendly_name or self.name
 
 class Message(models.Model):
     sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)

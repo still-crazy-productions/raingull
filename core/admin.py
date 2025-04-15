@@ -53,16 +53,22 @@ class DynamicServiceInstanceAdminForm(forms.ModelForm):
 
                     self.fields[f'config_{field_name}'] = field
 
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        config_fields = {k.replace('config_', ''): v for k, v in self.cleaned_data.items() if k.startswith('config_')}
+        instance.configuration = config_fields
+        if commit:
+            instance.save()
+        return instance
+
 class ServiceInstanceAdmin(admin.ModelAdmin):
     form = DynamicServiceInstanceAdminForm
     list_display = ['name', 'plugin', 'enabled']
     list_filter = ['plugin', 'enabled']
 
     def get_form(self, request, obj=None, **kwargs):
-        defaults = {}
-        defaults.update(kwargs)
-        defaults['form'] = self.form
-        return super().get_form(request, obj, **defaults)
+        form = super().get_form(request, obj, **kwargs)
+        return form
 
     def get_fieldsets(self, request, obj=None):
         basic_fields = ['name', 'plugin', 'enabled']
@@ -81,13 +87,13 @@ class ServiceInstanceAdmin(admin.ModelAdmin):
 
         return fieldsets
 
-    def save_model(self, request, obj, form, change):
-        config_fields = {k.replace('config_', ''): v for k, v in form.cleaned_data.items() if k.startswith('config_')}
-        obj.configuration = config_fields
-        super().save_model(request, obj, form, change)
+class PluginAdmin(admin.ModelAdmin):
+    list_display = ['name', 'enabled']
+    list_filter = ['enabled']
+    fields = ['name', 'enabled']
 
 admin.site.register(UserProfile)
-admin.site.register(Plugin)
+admin.site.register(Plugin, PluginAdmin)
 admin.site.register(Message)
 admin.site.register(RainGullStandardMessage)
 admin.site.register(ServiceInstance, ServiceInstanceAdmin)
