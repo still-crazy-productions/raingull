@@ -1,6 +1,5 @@
 from django.apps import AppConfig
 
-
-class EmailPluginConfig(AppConfig):
+class SmtpPluginConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'plugins.email_plugin'
+    name = 'plugins.smtp_plugin'

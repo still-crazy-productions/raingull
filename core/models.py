@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+import uuid
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
@@ -10,12 +11,11 @@ class UserProfile(models.Model):
 
 class Plugin(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
+    friendly_name = models.CharField(max_length=100)
     enabled = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.name
+        return self.friendly_name
 
 class Message(models.Model):
     sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -27,8 +27,6 @@ class Message(models.Model):
 
     def __str__(self):
         return f"{self.subject} (status: {self.status})"
-
-import uuid
 
 class RainGullStandardMessage(models.Model):
     raingull_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -77,10 +75,10 @@ class RainGullStandardMessage(models.Model):
         return f"{self.raingull_id} | {self.message_type} | {self.processing_status}"
 
 class ServiceInstance(models.Model):
-    plugin = models.ForeignKey('Plugin', on_delete=models.CASCADE)
+    plugin = models.ForeignKey(Plugin, on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
-    active = models.BooleanField(default=True)
+    enabled = models.BooleanField(default=True)
     configuration = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
-        return f"{self.name} ({self.plugin.name})"
+        return f"{self.name} ({self.plugin.friendly_name})"

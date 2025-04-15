@@ -8,7 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class DynamicServiceInstanceForm(forms.ModelForm):
     class Meta:
         model = ServiceInstance
-        fields = ['name', 'plugin', 'active']
+        fields = ['name', 'plugin', 'enabled']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

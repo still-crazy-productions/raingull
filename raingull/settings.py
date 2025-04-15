@@ -40,8 +40,8 @@ INSTALLED_APPS = [
 
     #My Apps
     'core',
-    'plugins.email_plugin.apps.EmailPluginConfig',
-]
+    'plugins.imap_plugin.apps.ImapPluginConfig',
+    'plugins.smtp_plugin.apps.SmtpPluginConfig',]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

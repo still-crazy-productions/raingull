@@ -1,0 +1,14 @@
+{
+    "plugin_name": "SMTP Plugin",
+    "description": "RainGull SMTP Plugin for sending emails.",
+    "version": "0.1",
+    "incoming": false,
+    "outgoing": true,
+    "config_fields": [
+        {"name": "smtp_server", "type": "string", "label": "SMTP Server URL", "required": true},
+        {"name": "smtp_port", "type": "integer", "label": "SMTP Server Port", "default": 587, "required": true},
+        {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["None", "STARTTLS", "SSL/TLS"], "default": "STARTTLS", "required": true},
+        {"name": "username", "type": "string", "label": "SMTP Username", "required": true},
+        {"name": "password", "type": "password", "label": "SMTP Password", "required": true}
+    ]
+}
