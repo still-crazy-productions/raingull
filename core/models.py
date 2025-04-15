@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
 import uuid
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_delete
 from django.dispatch import receiver
 import json
 import os
@@ -202,50 +202,80 @@ def update_plugin_instance(sender, instance, **kwargs):
     except PluginInstance.DoesNotExist:
         pass
 
-@receiver(post_delete, sender=ServiceInstance)
-def delete_plugin_instance(sender, instance, **kwargs):
-    """
-    Deletes the PluginInstance when a ServiceInstance is deleted.
-    """
-    try:
-        instance.plugin_instance.delete()
-    except PluginInstance.DoesNotExist:
-        pass
-
 @receiver(post_save, sender=ServiceInstance)
 def create_message_tables(sender, instance, created, **kwargs):
     """
     Creates dynamic tables for the service instance when it's created.
     """
     if created:
-        manifest = instance.plugin.get_manifest()
-        if manifest and 'message_schemas' in manifest:
-            # Create incoming table if plugin supports incoming
-            if manifest.get('incoming', False):
-                incoming_schema = manifest['message_schemas'].get('incoming', {})
-                if incoming_schema:
-                    model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_incoming_{instance.id}"
-                    create_dynamic_model(model_name, table_name, incoming_schema)
-            
-            # Create outgoing table if plugin supports outgoing
-            if manifest.get('outgoing', False):
-                outgoing_schema = manifest['message_schemas'].get('outgoing', {})
-                if outgoing_schema:
-                    model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_outgoing_{instance.id}"
-                    create_dynamic_model(model_name, table_name, outgoing_schema)
+        try:
+            manifest = instance.plugin.get_manifest()
+            if manifest and 'message_schemas' in manifest:
+                # Create incoming table if plugin supports incoming
+                if manifest.get('incoming', False):
+                    incoming_schema = manifest['message_schemas'].get('incoming', {})
+                    if incoming_schema:
+                        model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
+                        table_name = f"{instance.plugin.name}_incoming_{instance.id}"
+                        logger.info(f"Creating incoming message table {table_name}")
+                        create_dynamic_model(model_name, table_name, incoming_schema)
+                
+                # Create outgoing table if plugin supports outgoing
+                if manifest.get('outgoing', False):
+                    outgoing_schema = manifest['message_schemas'].get('outgoing', {})
+                    if outgoing_schema:
+                        model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
+                        table_name = f"{instance.plugin.name}_outgoing_{instance.id}"
+                        logger.info(f"Creating outgoing message table {table_name}")
+                        create_dynamic_model(model_name, table_name, outgoing_schema)
+        except Exception as e:
+            logger.error(f"Error creating message tables for {instance.name}: {e}")
 
 @receiver(post_delete, sender=ServiceInstance)
 def delete_message_tables(sender, instance, **kwargs):
     """
     Deletes the dynamic tables when the service instance is deleted.
     """
-    manifest = instance.plugin.get_manifest()
-    if manifest and 'message_schema' in manifest:
-        # Delete incoming table if it exists
-        if instance.plugin.incoming:
-            delete_dynamic_model(instance, manifest['message_schema'], direction='incoming')
-        # Delete outgoing table if it exists
-        if instance.plugin.outgoing:
-            delete_dynamic_model(instance, manifest['message_schema'], direction='outgoing')
+    try:
+        manifest = instance.plugin.get_manifest()
+        if manifest and 'message_schemas' in manifest:
+            # Delete incoming table if plugin supports incoming
+            if manifest.get('incoming', False):
+                incoming_schema = manifest['message_schemas'].get('incoming', {})
+                if incoming_schema:
+                    model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
+                    table_name = f"{instance.plugin.name}_incoming_{instance.id}"
+                    logger.info(f"Deleting incoming message table {table_name}")
+                    delete_dynamic_model(model_name, table_name)
+            
+            # Delete outgoing table if plugin supports outgoing
+            if manifest.get('outgoing', False):
+                outgoing_schema = manifest['message_schemas'].get('outgoing', {})
+                if outgoing_schema:
+                    model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
+                    table_name = f"{instance.plugin.name}_outgoing_{instance.id}"
+                    logger.info(f"Deleting outgoing message table {table_name}")
+                    delete_dynamic_model(model_name, table_name)
+    except Exception as e:
+        logger.error(f"Error deleting message tables for {instance.name}: {e}")
+
+@receiver(pre_delete, sender=ServiceInstance)
+def pre_delete_service_instance(sender, instance, **kwargs):
+    """
+    Handles cleanup tasks that need to happen before the ServiceInstance is deleted.
+    """
+    try:
+        # Log the deletion
+        logger.info(f"Deleting service instance {instance.name} (ID: {instance.id})")
+        
+        # Delete the plugin instance if it exists
+        try:
+            plugin_instance = instance.plugin_instance
+            logger.info(f"Deleting plugin instance for {instance.name}")
+            plugin_instance.delete()
+        except PluginInstance.DoesNotExist:
+            pass
+            
+        logger.info(f"Service instance {instance.name} cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during pre-delete cleanup for {instance.name}: {e}")

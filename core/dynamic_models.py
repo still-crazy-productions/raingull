@@ -50,15 +50,40 @@ def delete_dynamic_model(model_name, table_name):
     """
     Deletes a dynamic model.
     """
-    # Get the model
     try:
-        model = apps.get_model('core', model_name)
-    except LookupError:
-        return
-    
-    # Delete the table
-    with connection.schema_editor() as schema_editor:
-        schema_editor.delete_model(model)
-    
-    # Unregister the model
-    apps.unregister_model('core', model) 
+        # Try to get the model from Django's app registry
+        try:
+            model = apps.get_model('core', model_name)
+            # If we found the model, unregister it first
+            apps.unregister_model('core', model)
+        except LookupError:
+            # If the model isn't registered, create a minimal model class
+            attrs = {
+                '__module__': 'core.models',
+                'Meta': type('Meta', (), {
+                    'db_table': table_name,
+                    'app_label': 'core',
+                }),
+            }
+            model = type(model_name, (models.Model,), attrs)
+        
+        # Delete the table
+        with connection.schema_editor() as schema_editor:
+            try:
+                schema_editor.delete_model(model)
+                print(f"Successfully deleted table {table_name}")
+            except Exception as e:
+                print(f"Error deleting table {table_name}: {e}")
+                # Try to drop the table directly if the model deletion fails
+                with connection.cursor() as cursor:
+                    cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                    print(f"Attempted direct table drop for {table_name}")
+    except Exception as e:
+        print(f"Error in delete_dynamic_model for {model_name}: {e}")
+        # As a last resort, try to drop the table directly
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                print(f"Attempted final direct table drop for {table_name}")
+        except Exception as e2:
+            print(f"Final error dropping table {table_name}: {e2}") 

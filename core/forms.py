@@ -8,20 +8,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class DynamicServiceInstanceForm(forms.ModelForm):
     class Meta:
         model = ServiceInstance
-        fields = '__all__'
+        fields = ['name', 'incoming_enabled', 'outgoing_enabled']  # Only include these fields by default
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Get the plugin from the form data or instance
+        # Get the plugin from the instance
         plugin = None
-        if 'plugin' in self.data:
-            try:
-                plugin_id = int(self.data.get('plugin'))
-                plugin = Plugin.objects.get(id=plugin_id)
-            except (ValueError, Plugin.DoesNotExist):
-                pass
-        elif self.instance and self.instance.plugin:
+        if self.instance and self.instance.plugin:
             plugin = self.instance.plugin
 
         if plugin:
@@ -49,10 +43,11 @@ class DynamicServiceInstanceForm(forms.ModelForm):
                             label=field.get('label', field['name'].replace('_', ' ').title())
                         )
                     elif field['type'] == 'password':
+                        # Make password fields optional
                         self.fields[field_name] = forms.CharField(
-                            widget=forms.PasswordInput(),
-                            required=field.get('required', False),
-                            initial=current_value or '',
+                            widget=forms.PasswordInput(render_value=True),
+                            required=False,  # Always make password fields optional
+                            initial='',  # Don't show the current password
                             label=field.get('label', field['name'].replace('_', ' ').title())
                         )
                     else:  # string, text, etc.
@@ -64,22 +59,48 @@ class DynamicServiceInstanceForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
-        plugin = cleaned_data.get('plugin')
+        
+        # Get the plugin from the instance
+        plugin = None
+        if self.instance and self.instance.plugin:
+            plugin = self.instance.plugin
+
         if plugin:
             manifest = plugin.get_manifest()
             if manifest and 'config_fields' in manifest:
                 config = {}
+                # Start with existing config if we have an instance
+                if self.instance and self.instance.config:
+                    config = self.instance.config.copy()
+                
                 for field in manifest['config_fields']:
                     field_name = f"config_{field['name']}"
                     if field_name in cleaned_data:
-                        config[field['name']] = cleaned_data[field_name]
+                        # For password fields, only update if a new value is provided
+                        if field['type'] == 'password':
+                            new_value = cleaned_data[field_name]
+                            if new_value:  # Only update if a new password was entered
+                                config[field['name']] = new_value
+                        else:
+                            config[field['name']] = cleaned_data[field_name]
+                
                 cleaned_data['config'] = config
         return cleaned_data
 
     def save(self, commit=True):
         instance = super().save(commit=False)
+        
+        # Get the cleaned config data
+        config = self.cleaned_data.get('config', {})
+        print("Saving config:", config)
+        
+        # Update the instance's config
+        instance.config = config
+        
         if commit:
             instance.save()
+            print("Instance saved with config:", instance.config)
+        
         return instance
 
 class ServiceInstanceForm(forms.ModelForm):

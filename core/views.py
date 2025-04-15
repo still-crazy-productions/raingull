@@ -117,6 +117,18 @@ def manage_service_instance(request, instance_id=None):
     # Get the plugin manifest to check capabilities
     manifest = instance.plugin.get_manifest() if instance else None
     
+    # Check if the plugin has a test connection function
+    has_test_connection = False
+    if instance:
+        try:
+            module_path = f'plugins.{instance.plugin.name}.views'
+            module = __import__(module_path, fromlist=['test_connection'])
+            has_test_connection = hasattr(module, 'test_connection')
+            print(f"Test connection available for {instance.plugin.name}: {has_test_connection}")
+        except ImportError:
+            print(f"Error importing views for {instance.plugin.name}")
+            has_test_connection = False
+    
     # Create the form with the instance data
     form = DynamicServiceInstanceForm(request.POST or None, instance=instance)
     
@@ -124,15 +136,25 @@ def manage_service_instance(request, instance_id=None):
     if manifest and not manifest.get('outgoing', False):
         form.fields.pop('outgoing_enabled', None)
     
-    if request.method == 'POST' and form.is_valid():
-        form.save()
-        messages.success(request, 'Service instance saved successfully.')
-        return redirect('core:service_instance_list')
-
+    if request.method == 'POST':
+        print("Form data:", request.POST)
+        if form.is_valid():
+            print("Form is valid")
+            print("Cleaned data:", form.cleaned_data)
+            instance = form.save()
+            print("Instance saved")
+            print("New config:", instance.config)
+            messages.success(request, 'Service instance saved successfully.')
+            return redirect('core:service_instance_list')
+        else:
+            print("Form errors:", form.errors)
+            messages.error(request, 'Please correct the errors below.')
+    
     return render(request, 'core/manage_service_instance.html', {
         'form': form,
         'instance': instance,
         'manifest': manifest,
+        'has_test_connection': has_test_connection,
     })
 
 @login_required
@@ -175,3 +197,14 @@ def test_plugin_connection(request, plugin_name):
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return JsonResponse({'success': False, 'message': str(e)})
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def delete_service_instance(request, instance_id):
+    instance = get_object_or_404(ServiceInstance, pk=instance_id)
+    if request.method == 'POST':
+        instance_name = instance.name
+        instance.delete()
+        messages.success(request, f'Service instance "{instance_name}" has been deleted.')
+        return redirect('core:service_instance_list')
+    return redirect('core:manage_service_instance', instance_id=instance_id)

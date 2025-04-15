@@ -5,7 +5,7 @@
 
 {% block head %}
 {{ block.super }}
-{% if manifest.incoming %}
+{% if has_test_connection %}
 <script>
 function debug(message) {
     console.log(message);
@@ -154,9 +154,12 @@ debug('Test connection not available for this plugin');
                 {% endfor %}
 
                 <div class="d-flex justify-content-between">
-                    <a href="{% url 'core:service_instance_list' %}" class="btn btn-secondary">Cancel</a>
                     <div>
-                        {% if manifest.incoming %}
+                        <a href="{% url 'core:service_instance_list' %}" class="btn btn-secondary">Cancel</a>
+                        <button type="button" class="btn btn-danger ms-2" data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
+                    </div>
+                    <div>
+                        {% if has_test_connection %}
                             <button type="button" class="btn btn-info me-2" id="testConnectionBtn">Test Connection</button>
                         {% endif %}
                         <button type="submit" class="btn btn-primary">Save Changes</button>
@@ -167,11 +170,33 @@ debug('Test connection not available for this plugin');
     </div>
 </div>
 
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel">Confirm Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                Are you sure you want to delete "{{ instance.name }}"? This action cannot be undone.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" action="{% url 'core:delete_service_instance' instance.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Debug info -->
 <div class="mt-4">
     <pre>Debug Info:
 Plugin: {{ instance.plugin.name }}
-Has Test Connection: {{ manifest.incoming }}
+Has Test Connection: {{ has_test_connection }}
 Fields: {{ form.fields|length }}
 </pre>
 </div>
@@ -181,4 +206,89 @@ Fields: {{ form.fields|length }}
     <h5>Debug Output</h5>
     <pre id="debugText">Initializing...</pre>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{% if has_test_connection %}
+<script>
+function debug(message) {
+    console.log(message);
+    const debugOutput = document.getElementById('debugOutput');
+    const debugText = document.getElementById('debugText');
+    debugOutput.style.display = 'block';
+    debugText.textContent += message + '\n';
+}
+
+function testConnection() {
+    debug('Test connection button clicked');
+    
+    const form = document.getElementById('serviceForm');
+    if (!form) {
+        debug('Form not found!');
+        return;
+    }
+    
+    const formData = new FormData(form);
+    const config = {};
+    
+    debug('Form data:');
+    for (const [key, value] of formData.entries()) {
+        debug(`${key}: ${value}`);
+        if (key.startsWith('config_')) {
+            config[key.replace('config_', '')] = value;
+        }
+    }
+    
+    debug('Sending request...');
+    
+    fetch(`/core/services/test/{{ instance.plugin.name }}/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        },
+        body: JSON.stringify(config)
+    })
+    .then(response => {
+        debug(`Response status: ${response.status}`);
+        return response.json();
+    })
+    .then(data => {
+        debug(`Response data: ${JSON.stringify(data)}`);
+        if (data.success) {
+            alert('Connection test successful!');
+        } else {
+            alert('Connection test failed: ' + data.message);
+        }
+    })
+    .catch(error => {
+        debug('Error: ' + error.message);
+        alert('Error testing connection: ' + error.message);
+    });
+}
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    debug('Page loaded');
+    const testConnectionBtn = document.getElementById('testConnectionBtn');
+    if (testConnectionBtn) {
+        debug('Test connection button found');
+        testConnectionBtn.addEventListener('click', testConnection);
+    } else {
+        debug('Test connection button not found');
+    }
+});
+</script>
+{% else %}
+<script>
+function debug(message) {
+    console.log(message);
+    const debugOutput = document.getElementById('debugOutput');
+    const debugText = document.getElementById('debugText');
+    debugOutput.style.display = 'block';
+    debugText.textContent += message + '\n';
+}
+debug('Test connection not available for this plugin');
+</script>
+{% endif %}
 {% endblock %} 
