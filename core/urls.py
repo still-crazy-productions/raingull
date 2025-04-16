@@ -11,4 +11,7 @@ urlpatterns = [
     path('services/manage/<int:instance_id>/', views.manage_service_instance, name='manage_service_instance'),
     path('services/delete/<int:instance_id>/', views.delete_service_instance, name='delete_service_instance'),
     path('services/test/<str:plugin_name>/', views.test_plugin_connection, name='test_plugin_connection'),
+    path('test/', views.test_services, name='test_services'),
+    path('test/imap/retrieve/<int:instance_id>/', views.test_imap_retrieve, name='test_imap_retrieve'),
+    path('test/translate/<int:instance_id>/', views.test_translate_messages, name='test_translate_messages'),
 ]

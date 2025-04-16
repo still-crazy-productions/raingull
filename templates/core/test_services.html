@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Test Services{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Test Services</h1>
+    
+    {% for instance in service_instances %}
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">{{ instance.name }}</h5>
+            <small class="text-muted">Plugin Instance ID: {{ instance.plugin_instance.id }}</small>
+        </div>
+        
+        <div class="card-body">
+            <div class="mb-3">
+                <strong>Incoming Enabled:</strong> 
+                {% if instance.incoming_enabled %}
+                    <span class="text-success">Yes</span>
+                {% else %}
+                    <span class="text-danger">No</span>
+                {% endif %}
+            </div>
+            
+            {% if instance.plugin.name == 'imap_plugin' %}
+            <div class="incoming-section">
+                <h6>Incoming Messages</h6>
+                <button class="btn btn-primary retrieve-messages" 
+                        data-instance-id="{{ instance.id }}"
+                        data-plugin-name="imap_plugin">
+                    Retrieve Messages
+                </button>
+                <button class="btn btn-success translate-messages" 
+                        data-instance-id="{{ instance.id }}"
+                        data-plugin-name="imap_plugin">
+                    Translate Messages
+                </button>
+                <div class="mt-2 result-container" id="result-{{ instance.id }}">
+                    <!-- Results will be displayed here -->
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% csrf_token %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Get the CSRF token
+    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    
+    // Add click handlers to all retrieve buttons
+    document.querySelectorAll('.retrieve-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const instanceId = this.dataset.instanceId;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
+            
+            // Show loading state
+            resultContainer.innerHTML = '<div class="alert alert-info">Retrieving messages...</div>';
+            
+            // Make the request
+            fetch(`/core/test/imap/retrieve/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrfToken,
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    resultContainer.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                } else {
+                    resultContainer.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+                }
+            })
+            .catch(error => {
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            });
+        });
+    });
+
+    // Add click handlers to all translate buttons
+    document.querySelectorAll('.translate-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const instanceId = this.dataset.instanceId;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
+            
+            // Show loading state
+            resultContainer.innerHTML = '<div class="alert alert-info">Translating messages...</div>';
+            
+            // Make the request
+            fetch(`/core/test/translate/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrfToken,
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    resultContainer.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                } else {
+                    resultContainer.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+                }
+            })
+            .catch(error => {
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            });
+        });
+    });
+});
+</script>
+{% endblock %} 

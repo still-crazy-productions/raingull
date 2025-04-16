@@ -2,49 +2,68 @@ from django.db import models
 from django.apps import apps
 from django.db import connection
 import uuid
-import json
 
-def create_dynamic_model(model_name, table_name, schema):
-    """
-    Creates a dynamic model based on the provided schema.
-    """
-    # Create the model class
-    attrs = {
-        '__module__': 'core.models',
-        'Meta': type('Meta', (), {
-            'db_table': table_name,
-            'app_label': 'core',
-        }),
-    }
-    
-    # Add fields from the schema
-    for field_name, field_config in schema.items():
-        field_type = getattr(models, field_config['type'])
-        
-        # Convert required to null/blank
-        field_kwargs = {}
-        for k, v in field_config.items():
-            if k == 'type':
-                continue
-            elif k == 'required':
-                field_kwargs['null'] = not v
-                field_kwargs['blank'] = not v
-            else:
-                field_kwargs[k] = v
-        
-        attrs[field_name] = field_type(**field_kwargs)
-    
-    # Create the model class
-    model = type(model_name, (models.Model,), attrs)
-    
-    # Register the model with Django
-    apps.register_model('core', model)
-    
-    # Create the table
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    
-    return model
+def create_dynamic_model(model_name, table_name, schema, create_table=True):
+    """Create a dynamic model for a service instance"""
+    try:
+        # Create the model class
+        attrs = {
+            '__module__': 'core.models',
+            'Meta': type('Meta', (), {
+                'db_table': table_name,
+                'app_label': 'core',
+            }),
+        }
+
+        # Add fields based on schema
+        for field_name, field_config in schema.items():
+            field_type = field_config.get('type')
+            field_kwargs = {}
+            
+            # Handle required field
+            if 'required' in field_config:
+                field_kwargs['null'] = not field_config['required']
+                field_kwargs['blank'] = not field_config['required']
+            
+            # Handle max_length for CharField
+            if field_type == 'CharField' and 'max_length' in field_config:
+                field_kwargs['max_length'] = field_config['max_length']
+            
+            # Handle default value
+            if 'default' in field_config:
+                field_kwargs['default'] = field_config['default']
+            
+            # Map field types to Django model fields
+            if field_type == 'CharField':
+                attrs[field_name] = models.CharField(**field_kwargs)
+            elif field_type == 'TextField':
+                attrs[field_name] = models.TextField(**field_kwargs)
+            elif field_type == 'DateTimeField':
+                attrs[field_name] = models.DateTimeField(**field_kwargs)
+            elif field_type == 'BooleanField':
+                attrs[field_name] = models.BooleanField(**field_kwargs)
+            elif field_type == 'IntegerField':
+                attrs[field_name] = models.IntegerField(**field_kwargs)
+            elif field_type == 'JSONField':
+                attrs[field_name] = models.JSONField(**field_kwargs)
+            elif field_type == 'UUIDField':
+                attrs[field_name] = models.UUIDField(**field_kwargs)
+
+        # Create the model class
+        model = type(model_name, (models.Model,), attrs)
+
+        # Register the model
+        apps.register_model('core', model)
+
+        # Create the table if requested
+        if create_table:
+            with connection.schema_editor() as schema_editor:
+                schema_editor.create_model(model)
+
+        return model
+    except Exception as e:
+        print(f"Error creating dynamic model {model_name}: {e}")
+        return None
 
 def delete_dynamic_model(model_name, table_name):
     """

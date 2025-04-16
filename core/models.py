@@ -11,6 +11,7 @@ from django.conf import settings
 from .dynamic_models import create_dynamic_model, delete_dynamic_model
 import importlib
 import logging
+from django.db import connection
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,11 @@ class Plugin(models.Model):
             logger.error(f"Error loading plugin class for {self.name}: {e}")
             return None
 
-    def get_plugin_instance(self):
+    def get_plugin_instance(self, service_instance=None):
         try:
             plugin_class = self.get_plugin_class()
             if plugin_class:
-                return plugin_class(self)
+                return plugin_class(service_instance)
             return None
         except Exception as e:
             logger.error(f"Error creating plugin instance for {self.name}: {e}")
@@ -76,10 +77,22 @@ class Plugin(models.Model):
             model_name = f"{self.name}{direction.capitalize()}Message_{service_instance.id}"
             table_name = f"{self.name}_{direction}_{service_instance.id}"
 
-            # Create the dynamic model
-            return create_dynamic_model(model_name, table_name, schema)
+            # Check if the model is already registered
+            try:
+                model = apps.get_model('core', model_name)
+                if model:
+                    print(f"Found existing model {model_name}")
+                    return model
+            except LookupError:
+                # Model not found, create it
+                pass
+
+            # Create the model without trying to create the table
+            print(f"Creating model for existing table {table_name}")
+            return create_dynamic_model(model_name, table_name, schema, create_table=False)
+
         except Exception as e:
-            logger.error(f"Error creating message model for {self.name}: {e}")
+            print(f"Error creating message model for {self.name}: {e}")
             return None
 
 class PluginInstance(models.Model):
@@ -101,52 +114,6 @@ class Message(models.Model):
     def __str__(self):
         return f"{self.subject} (status: {self.status})"
 
-class RainGullStandardMessage(models.Model):
-    raingull_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
-    
-    processing_status = models.CharField(max_length=20, choices=[
-        ('new', 'New'),
-        ('queued', 'Queued'),
-        ('sending', 'Sending'),
-        ('distributed', 'Distributed'),
-        ('failed', 'Failed'),
-    ], default='new')
-    
-    origin_service_id = models.CharField(max_length=100)
-    message_type = models.CharField(max_length=20, choices=[
-        ('email', 'Email'),
-        ('sms', 'SMS'),
-        ('telegram', 'Telegram'),
-        ('discord', 'Discord'),
-        ('signal', 'Signal'),
-        ('whatsapp', 'WhatsApp'),
-        ('slack', 'Slack'),
-        ('teams', 'Teams'),
-        ('other', 'Other'),
-    ], default='other')
-
-    sent_timestamp = models.DateTimeField(null=True, blank=True)
-    received_timestamp = models.DateTimeField(auto_now_add=True)
-    processed_timestamp = models.DateTimeField(auto_now_add=True)
-
-    original_sender = models.CharField(max_length=255)
-    original_sender_name = models.CharField(max_length=255, null=True, blank=True)
-    original_recipient_list = models.JSONField(null=True, blank=True)
-
-    member_display_name = models.CharField(max_length=255, null=True, blank=True)
-
-    subject = models.CharField(max_length=255, null=True, blank=True)
-    snippet = models.CharField(max_length=255, null=True, blank=True)
-    message_body = models.TextField()
-
-    additional_headers = models.JSONField(null=True, blank=True)
-
-    class Meta:
-        db_table = "rg_standard_messages"
-
-    def __str__(self):
-        return f"{self.raingull_id} | {self.message_type} | {self.processing_status}"
-
 class ServiceInstance(models.Model):
     name = models.CharField(max_length=255)
     plugin = models.ForeignKey(Plugin, on_delete=models.CASCADE)
@@ -164,6 +131,10 @@ class ServiceInstance(models.Model):
 
     def get_message_model(self, direction):
         return self.plugin.get_message_model(self, direction)
+
+    def get_plugin_instance(self):
+        """Get an instance of the plugin class for this service instance"""
+        return self.plugin.get_plugin_instance(service_instance=self)
 
     def save(self, *args, **kwargs):
         # Get plugin capabilities from manifest
@@ -207,18 +178,25 @@ def create_message_tables(sender, instance, created, **kwargs):
     """
     Creates dynamic tables for the service instance when it's created.
     """
-    if created:
-        try:
-            manifest = instance.plugin.get_manifest()
-            if manifest and 'message_schemas' in manifest:
-                # Create incoming table if plugin supports incoming
-                if manifest.get('incoming', False):
-                    incoming_schema = manifest['message_schemas'].get('incoming', {})
-                    if incoming_schema:
-                        model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-                        table_name = f"{instance.plugin.name}_incoming_{instance.id}"
-                        logger.info(f"Creating incoming message table {table_name}")
-                        create_dynamic_model(model_name, table_name, incoming_schema)
+    try:
+        manifest = instance.plugin.get_manifest()
+        if manifest and 'message_schemas' in manifest:
+            # Create incoming table if plugin supports incoming
+            if manifest.get('incoming', False):
+                incoming_schema = manifest['message_schemas'].get('incoming', {})
+                if incoming_schema:
+                    model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
+                    table_name = f"{instance.plugin.name}_incoming_{instance.id}"
+                    logger.info(f"Creating incoming message table {table_name}")
+                    
+                    # Drop existing table if it exists
+                    with connection.cursor() as cursor:
+                        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                        logger.info(f"Dropped existing table {table_name}")
+                    
+                    # Create new table
+                    create_dynamic_model(model_name, table_name, incoming_schema)
+                    logger.info(f"Created new table {table_name}")
                 
                 # Create outgoing table if plugin supports outgoing
                 if manifest.get('outgoing', False):
@@ -227,9 +205,17 @@ def create_message_tables(sender, instance, created, **kwargs):
                         model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
                         table_name = f"{instance.plugin.name}_outgoing_{instance.id}"
                         logger.info(f"Creating outgoing message table {table_name}")
+                        
+                        # Drop existing table if it exists
+                        with connection.cursor() as cursor:
+                            cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                            logger.info(f"Dropped existing table {table_name}")
+                        
+                        # Create new table
                         create_dynamic_model(model_name, table_name, outgoing_schema)
-        except Exception as e:
-            logger.error(f"Error creating message tables for {instance.name}: {e}")
+                        logger.info(f"Created new table {table_name}")
+    except Exception as e:
+        logger.error(f"Error creating message tables for {instance.name}: {e}")
 
 @receiver(post_delete, sender=ServiceInstance)
 def delete_message_tables(sender, instance, **kwargs):
@@ -279,3 +265,46 @@ def pre_delete_service_instance(sender, instance, **kwargs):
         logger.info(f"Service instance {instance.name} cleanup completed")
     except Exception as e:
         logger.error(f"Error during pre-delete cleanup for {instance.name}: {e}")
+
+class RaingullStandardMessage(models.Model):
+    """Standardized message format for all incoming messages."""
+    raingull_id = models.UUIDField(primary_key=True, editable=False)  # No default, will be copied from source
+    source_service = models.ForeignKey(ServiceInstance, on_delete=models.CASCADE)
+    source_message_id = models.CharField(max_length=255)
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    snippet = models.CharField(max_length=200, blank=True)  # First 200 chars of body
+    sender = models.CharField(max_length=255)
+    recipients = models.JSONField()
+    date = models.DateTimeField()
+    headers = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['source_service', 'source_message_id']),
+            models.Index(fields=['date']),
+        ]
+
+    def __str__(self):
+        return f"{self.subject} ({self.sender})"
+
+    @classmethod
+    def create_standard_message(cls, source_service, source_message_id, subject, body, sender, recipients, date, headers, raingull_id):
+        """Create a new standard message."""
+        # Create snippet from first 200 chars of body
+        snippet = body[:200].strip()
+        
+        return cls.objects.create(
+            raingull_id=raingull_id,  # Use the provided raingull_id
+            source_service=source_service,
+            source_message_id=source_message_id,
+            subject=subject,
+            body=body,
+            snippet=snippet,
+            sender=sender,
+            recipients=recipients,
+            date=date,
+            headers=headers
+        )

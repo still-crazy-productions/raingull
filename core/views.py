@@ -2,13 +2,17 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
-from core.models import ServiceInstance, Plugin
+from core.models import ServiceInstance, Plugin, RaingullStandardMessage
 from core.forms import DynamicServiceInstanceForm, ServiceInstanceForm
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.module_loading import import_string
 import json
 import os
+import imaplib
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from django.utils import timezone
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -208,3 +212,118 @@ def delete_service_instance(request, instance_id):
         messages.success(request, f'Service instance "{instance_name}" has been deleted.')
         return redirect('core:service_instance_list')
     return redirect('core:manage_service_instance', instance_id=instance_id)
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def test_services(request):
+    """
+    Test page for manually running service operations
+    """
+    # Get all service instances with their plugin instances
+    service_instances = ServiceInstance.objects.select_related('plugin', 'plugin_instance').all()
+    
+    # Add is_imap flag to each instance
+    for instance in service_instances:
+        instance.is_imap = instance.plugin.name == 'imap_plugin'
+    
+    return render(request, 'core/test_services.html', {
+        'service_instances': service_instances
+    })
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def test_imap_retrieve(request, instance_id):
+    try:
+        service_instance = ServiceInstance.objects.get(id=instance_id)
+        plugin = service_instance.get_plugin_instance()
+        result = plugin.retrieve_messages()
+        return JsonResponse(result)
+    except ServiceInstance.DoesNotExist:
+        return JsonResponse({"success": False, "message": "Service instance not found"})
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)})
+
+@login_required
+def test_translate_messages(request, instance_id):
+    try:
+        service_instance = ServiceInstance.objects.get(id=instance_id)
+        plugin = service_instance.get_plugin_instance()
+        
+        # Get the incoming message model
+        incoming_model = service_instance.get_message_model('incoming')
+        if not incoming_model:
+            return JsonResponse({"success": False, "message": "No incoming message model found"})
+            
+        # Get all unprocessed messages
+        messages = incoming_model.objects.filter(status='new')
+        message_count = messages.count()
+        print(f"Found {message_count} unprocessed messages")
+        
+        # Log details of each message
+        for msg in messages:
+            print(f"\nMessage ID: {msg.id}")
+            print(f"Subject: {msg.subject}")
+            print(f"From: {msg.email_from}")
+            print(f"Date: {msg.date}")
+            print(f"Status: {msg.status}")
+            print(f"Body length: {len(msg.body) if msg.body else 0}")
+            if hasattr(msg, 'headers'):
+                print(f"Headers: {msg.headers}")
+            print("-" * 50)
+        
+        translated_count = 0
+        
+        # Get the Raingull standard message model
+        from email.utils import parsedate_to_datetime
+        
+        for message in messages:
+            try:
+                print(f"\nAttempting to translate message {message.id}:")
+                print(f"Subject: {message.subject}")
+                
+                # Parse the IMAP date string
+                received_at = parsedate_to_datetime(message.date)
+                print(f"Parsed date: {received_at}")
+                
+                # Create a new Raingull standard message
+                standard_message = RaingullStandardMessage.create_standard_message(
+                    raingull_id=message.raingull_id,  # Copy the raingull_id from the source message
+                    source_service=service_instance,
+                    source_message_id=message.imap_message_id,
+                    subject=message.subject,
+                    body=message.body,
+                    sender=message.email_from,
+                    recipients=message.to,  # Already a list, no need to convert to JSON
+                    date=received_at,
+                    headers=message.headers if hasattr(message, 'headers') else {}
+                )
+                print(f"Successfully created standard message with raingull_id: {standard_message.raingull_id}")
+                
+                # Mark the original message as processed
+                message.status = 'processed'
+                message.processed_at = timezone.now()
+                message.save()
+                print(f"Marked original message as processed")
+                
+                translated_count += 1
+                
+            except Exception as e:
+                print(f"Error translating message {message.id}: {str(e)}")
+                print(f"Error type: {type(e)}")
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
+                continue
+        
+        return JsonResponse({
+            "success": True,
+            "message": f"Found {message_count} messages, translated {translated_count} to Raingull standard format"
+        })
+        
+    except ServiceInstance.DoesNotExist:
+        return JsonResponse({"success": False, "message": "Service instance not found"})
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        return JsonResponse({"success": False, "message": str(e)})

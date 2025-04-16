@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Test Services</h2>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Service Instances</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Friendly Name</th>
+                                    <th>Plugin Instance ID</th>
+                                    <th>Incoming Enabled</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for instance in service_instances %}
+                                <tr>
+                                    <td>{{ instance.friendly_name }}</td>
+                                    <td>{{ instance.plugin_instance.id }}</td>
+                                    <td>{{ instance.plugin_instance.incoming_enabled|yesno:"Yes,No" }}</td>
+                                    <td>
+                                        <!-- Debug output -->
+                                        Plugin name: {{ instance.plugin.name }}<br>
+                                        Plugin type: {{ instance.plugin.name|type }}<br>
+                                        <!-- End debug output -->
+                                        {% if instance.is_imap %}
+                                        <button class="btn btn-primary retrieve-messages" data-instance-id="{{ instance.id }}">
+                                            Retrieve Messages
+                                        </button>
+                                        <button class="btn btn-success translate-messages" data-instance-id="{{ instance.id }}">
+                                            Translate Messages
+                                        </button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading Modal -->
+<div class="modal fade" id="loadingModal" tabindex="-1" role="dialog" aria-labelledby="loadingModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="loadingModalLabel">Processing</h5>
+            </div>
+            <div class="modal-body">
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                    <p class="mt-2" id="loadingMessage">Please wait...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // Handle Retrieve Messages button click
+    $('.retrieve-messages').click(function() {
+        const instanceId = $(this).data('instance-id');
+        const button = $(this);
+        
+        // Show loading modal
+        $('#loadingModal').modal('show');
+        $('#loadingMessage').text('Retrieving messages...');
+        
+        // Make AJAX request
+        $.ajax({
+            url: `/core/test/imap/retrieve/${instanceId}/`,
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                $('#loadingMessage').text(response.message);
+                setTimeout(function() {
+                    $('#loadingModal').modal('hide');
+                }, 2000);
+            },
+            error: function(xhr, status, error) {
+                $('#loadingMessage').text('Error: ' + (xhr.responseJSON?.message || error));
+                setTimeout(function() {
+                    $('#loadingModal').modal('hide');
+                }, 2000);
+            }
+        });
+    });
+
+    // Add click handler for Translate Messages button
+    $('.translate-messages').click(function() {
+        const instanceId = $(this).data('instance-id');
+        const button = $(this);
+        
+        button.prop('disabled', true).text('Translating...');
+        
+        $.ajax({
+            url: `/core/test/translate/${instanceId}/`,
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert(`Successfully translated ${response.count} messages to Raingull standard format!`);
+                } else {
+                    alert('Error: ' + response.error);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('Error: ' + error);
+            },
+            complete: function() {
+                button.prop('disabled', false).text('Translate Messages');
+            }
+        });
+    });
+});
+</script>
+{% endblock %} 

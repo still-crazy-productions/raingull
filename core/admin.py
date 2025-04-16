@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django import forms
-from .models import UserProfile, Plugin, Message, RainGullStandardMessage, ServiceInstance, PluginInstance
+from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import User
+from .models import UserProfile, Plugin, Message, RaingullStandardMessage, ServiceInstance, PluginInstance
 import json
 from pathlib import Path
 from .forms import ServiceInstanceForm
@@ -136,4 +138,4 @@ class PluginAdmin(admin.ModelAdmin):
 
 admin.site.register(UserProfile)
 admin.site.register(Message)
-admin.site.register(RainGullStandardMessage)
+admin.site.register(RaingullStandardMessage)

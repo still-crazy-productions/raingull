@@ -17,13 +17,13 @@
   ],
   "message_schemas": {
     "incoming": {
-      "message_id": {"type": "CharField", "max_length": 255, "required": true},
+      "raingull_id": {"type": "UUIDField", "required": true},
+      "imap_message_id": {"type": "CharField", "max_length": 255, "required": true},
       "subject": {"type": "CharField", "max_length": 255, "required": true},
-      "from": {"type": "CharField", "max_length": 255, "required": true},
-      "to": {"type": "CharField", "max_length": 255, "required": true},
-      "date": {"type": "DateTimeField", "required": true},
+      "email_from": {"type": "CharField", "max_length": 255, "required": true},
+      "to": {"type": "JSONField", "required": true},
+      "date": {"type": "CharField", "max_length": 255, "required": true},
       "body": {"type": "TextField", "required": true},
-      "attachments": {"type": "JSONField", "required": false},
       "headers": {"type": "JSONField", "required": false},
       "status": {"type": "CharField", "max_length": 20, "required": true, "default": "new"},
       "processed_at": {"type": "DateTimeField", "required": false}
