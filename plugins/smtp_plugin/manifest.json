@@ -10,5 +10,14 @@
         {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["None", "STARTTLS", "SSL/TLS"], "default": "STARTTLS", "required": true},
         {"name": "username", "type": "string", "label": "SMTP Username", "required": true},
         {"name": "password", "type": "password", "label": "SMTP Password", "required": true}
-    ]
+    ],
+    "message_schemas": {
+        "outgoing": {
+            "to": {"type": "CharField", "max_length": 255, "required": true},
+            "subject": {"type": "CharField", "max_length": 255, "required": true},
+            "body": {"type": "TextField", "required": true},
+            "sent_at": {"type": "DateTimeField", "auto_now_add": true},
+            "status": {"type": "CharField", "max_length": 20, "choices": ["queued", "sending", "sent", "failed"], "default": "queued"}
+        }
+    }
 }
