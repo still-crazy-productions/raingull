@@ -1,8 +1,7 @@
 from django.contrib import admin
 from django import forms
 from django.contrib.auth.admin import UserAdmin
-from django.contrib.auth.models import User
-from .models import UserProfile, Plugin, Message, RaingullStandardMessage, ServiceInstance, PluginInstance
+from .models import UserProfile, Plugin, Message, RaingullStandardMessage, ServiceInstance, PluginInstance, UserServiceActivation, RaingullUser
 import json
 from pathlib import Path
 from .forms import ServiceInstanceForm
@@ -136,6 +135,61 @@ class PluginAdmin(admin.ModelAdmin):
     search_fields = ('name', 'friendly_name')
     fields = ('name', 'friendly_name', 'version', 'enabled')
 
+@admin.register(UserServiceActivation)
+class UserServiceActivationAdmin(admin.ModelAdmin):
+    list_display = ('user', 'service_instance', 'is_active', 'created_at')
+    list_filter = ('is_active', 'service_instance__plugin', 'service_instance')
+    search_fields = ('user__username', 'service_instance__name')
+    readonly_fields = ('created_at', 'updated_at')
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        if obj and obj.service_instance.plugin.name == 'smtp_plugin':
+            # Add email field for SMTP plugin
+            form.base_fields['email_address'] = forms.EmailField(
+                required=True,
+                initial=obj.config.get('email_address') if obj else None
+            )
+        return form
+
+    def save_model(self, request, obj, form, change):
+        if obj.service_instance.plugin.name == 'smtp_plugin':
+            # Save email address to config for SMTP plugin
+            obj.config = {'email_address': form.cleaned_data['email_address']}
+        super().save_model(request, obj, form, change)
+
 admin.site.register(UserProfile)
 admin.site.register(Message)
 admin.site.register(RaingullStandardMessage)
+
+@admin.register(RaingullUser)
+class RaingullUserAdmin(UserAdmin):
+    # Fields to show in the add user form
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('username', 'password1', 'password2'),
+        }),
+        ('Personal info', {
+            'fields': ('first_name', 'last_name', 'email'),
+        }),
+        ('Permissions', {
+            'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
+        }),
+    )
+
+    # Fields to show in the change user form
+    fieldsets = (
+        (None, {'fields': ('username', 'password')}),
+        ('Personal info', {'fields': ('first_name', 'last_name', 'email')}),
+        ('Permissions', {
+            'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
+        }),
+        ('Important dates', {'fields': ('last_login', 'date_joined')}),
+    )
+
+    # Fields to show in the list view
+    list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff', 'is_active')
+    list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups')
+    search_fields = ('username', 'first_name', 'last_name', 'email')
+    ordering = ('username',)

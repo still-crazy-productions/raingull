@@ -24,6 +24,15 @@
                 {% endif %}
             </div>
             
+            <div class="mb-3">
+                <strong>Outgoing Enabled:</strong> 
+                {% if instance.outgoing_enabled %}
+                    <span class="text-success">Yes</span>
+                {% else %}
+                    <span class="text-danger">No</span>
+                {% endif %}
+            </div>
+            
             {% if instance.plugin.name == 'imap_plugin' %}
             <div class="incoming-section">
                 <h6>Incoming Messages</h6>
@@ -42,80 +51,268 @@
                 </div>
             </div>
             {% endif %}
+
+            {% if instance.plugin.name == 'smtp_plugin' %}
+            <div class="outgoing-section">
+                <h6>Outgoing Messages</h6>
+                <button class="btn btn-primary send-messages" 
+                        data-instance-id="{{ instance.id }}"
+                        data-plugin-name="smtp_plugin">
+                    Translate Out
+                </button>
+                <button class="btn btn-info queue-messages" 
+                        data-instance-id="{{ instance.id }}"
+                        data-plugin-name="smtp_plugin">
+                    Queue Messages
+                </button>
+                <button class="btn btn-success send-messages" 
+                        data-instance-id="{{ instance.id }}"
+                        data-plugin-name="smtp_plugin">
+                    Send Messages
+                </button>
+                <div class="mt-2 result-container" id="result-{{ instance.id }}">
+                    <!-- Results will be displayed here -->
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
     {% endfor %}
 </div>
+
+<!-- Service Activation Section -->
+<div class="card mt-4">
+    <div class="card-header">
+        <h5 class="mb-0">Activate Service Instance</h5>
+    </div>
+    <div class="card-body">
+        <form id="activateServiceForm">
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="userSelect">Select User</label>
+                        <select class="form-control" id="userSelect" required>
+                            <option value="">Choose a user...</option>
+                            {% for user in users %}
+                            <option value="{{ user.id }}">{{ user.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="serviceSelect">Select Service Instance</label>
+                        <select class="form-control" id="serviceSelect" required>
+                            <option value="">Choose a service...</option>
+                            {% for instance in service_instances %}
+                                <option value="{{ instance.id }}" data-plugin="{{ instance.plugin.name }}">
+                                    {{ instance.name }} ({{ instance.plugin.name }})
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div id="configFields" class="mt-3">
+                <!-- Dynamic config fields will be inserted here -->
+            </div>
+            <button type="submit" class="btn btn-primary mt-3">Activate Service</button>
+        </form>
+        <div id="activationResult" class="mt-3"></div>
+    </div>
+</div>
+
 {% csrf_token %}
 {% endblock %}
 
 {% block extra_js %}
 <script>
+// Add the getCookie function
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Get the CSRF token
-    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-    
-    // Add click handlers to all retrieve buttons
+    // Handle IMAP Retrieve Messages button
     document.querySelectorAll('.retrieve-messages').forEach(button => {
         button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
             const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            // Show loading state
-            resultContainer.innerHTML = '<div class="alert alert-info">Retrieving messages...</div>';
-            
-            // Make the request
             fetch(`/core/test/imap/retrieve/${instanceId}/`, {
                 method: 'POST',
                 headers: {
-                    'X-CSRFToken': csrfToken,
-                    'Content-Type': 'application/json'
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 }
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    resultContainer.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
-                } else {
-                    resultContainer.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
-                }
+                resultContainer.innerHTML = `<div class="alert ${data.success ? 'alert-success' : 'alert-danger'}">${data.message}</div>`;
             })
             .catch(error => {
-                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error}</div>`;
             });
         });
     });
 
-    // Add click handlers to all translate buttons
+    // Handle IMAP Translate Messages button
     document.querySelectorAll('.translate-messages').forEach(button => {
         button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
             const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            // Show loading state
-            resultContainer.innerHTML = '<div class="alert alert-info">Translating messages...</div>';
-            
-            // Make the request
             fetch(`/core/test/translate/${instanceId}/`, {
                 method: 'POST',
                 headers: {
-                    'X-CSRFToken': csrfToken,
-                    'Content-Type': 'application/json'
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 }
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    resultContainer.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
-                } else {
-                    resultContainer.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
-                }
+                resultContainer.innerHTML = `<div class="alert ${data.success ? 'alert-success' : 'alert-danger'}">${data.message}</div>`;
             })
             .catch(error => {
-                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error}</div>`;
+            });
+        });
+    });
+
+    // Handle SMTP Send Messages button
+    document.querySelectorAll('.send-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const instanceId = this.dataset.instanceId;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
+            
+            fetch(`/core/test/send/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                resultContainer.innerHTML = `<div class="alert ${data.success ? 'alert-success' : 'alert-danger'}">${data.message}</div>`;
+            })
+            .catch(error => {
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error}</div>`;
+            });
+        });
+    });
+
+    // Handle Queue Messages button
+    document.querySelectorAll('.queue-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const instanceId = this.dataset.instanceId;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
+            
+            fetch(`/core/test/queue/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                resultContainer.innerHTML = `<div class="alert ${data.success ? 'alert-success' : 'alert-danger'}">${data.message}</div>`;
+            })
+            .catch(error => {
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error}</div>`;
             });
         });
     });
 });
+
+// Service Activation Form Handler
+document.getElementById('activateServiceForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const userId = document.getElementById('userSelect').value;
+    const serviceId = document.getElementById('serviceSelect').value;
+    const config = {};
+    
+    // Collect all config field values
+    document.querySelectorAll('#configFields input, #configFields select').forEach(field => {
+        config[field.name] = field.value;
+    });
+    
+    fetch(`/core/test/activate-service/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken')
+        },
+        body: JSON.stringify({
+            user_id: userId,
+            service_instance_id: serviceId,
+            config: config
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        const resultDiv = document.getElementById('activationResult');
+        if (data.success) {
+            resultDiv.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+        } else {
+            resultDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+        }
+    })
+    .catch(error => {
+        document.getElementById('activationResult').innerHTML = 
+            `<div class="alert alert-danger">Error: ${error.message}</div>`;
+    });
+});
+
+// Load config fields when service is selected
+document.getElementById('serviceSelect').addEventListener('change', function() {
+    const serviceId = this.value;
+    const pluginName = this.options[this.selectedIndex].dataset.plugin;
+    const configFieldsDiv = document.getElementById('configFields');
+    
+    if (!serviceId) {
+        configFieldsDiv.innerHTML = '';
+        return;
+    }
+    
+    // Fetch config fields for the selected service
+    fetch(`/core/test/service-config-fields/${serviceId}/`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let html = '';
+                data.fields.forEach(field => {
+                    html += `
+                        <div class="form-group">
+                            <label for="config_${field.name}">${field.label}</label>
+                            ${field.type === 'select' ? 
+                                `<select class="form-control" name="${field.name}" id="config_${field.name}" ${field.required ? 'required' : ''}>
+                                    ${field.options.map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                                </select>` :
+                                `<input type="${field.type === 'password' ? 'password' : 'text'}" 
+                                       class="form-control" 
+                                       name="${field.name}" 
+                                       id="config_${field.name}" 
+                                       ${field.required ? 'required' : ''}>`
+                            }
+                        </div>
+                    `;
+                });
+                configFieldsDiv.innerHTML = html;
+            }
+        })
+        .catch(error => {
+            configFieldsDiv.innerHTML = `<div class="alert alert-danger">Error loading config fields: ${error.message}</div>`;
+        });
+});
 </script>
-{% endblock %} 
+{% endblock %}

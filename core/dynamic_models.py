@@ -25,8 +25,8 @@ def create_dynamic_model(model_name, table_name, schema, create_table=True):
                 field_kwargs['null'] = not field_config['required']
                 field_kwargs['blank'] = not field_config['required']
             
-            # Handle max_length for CharField
-            if field_type == 'CharField' and 'max_length' in field_config:
+            # Handle max_length for CharField and EmailField
+            if field_type in ['CharField', 'EmailField'] and 'max_length' in field_config:
                 field_kwargs['max_length'] = field_config['max_length']
             
             # Handle default value
@@ -36,6 +36,8 @@ def create_dynamic_model(model_name, table_name, schema, create_table=True):
             # Map field types to Django model fields
             if field_type == 'CharField':
                 attrs[field_name] = models.CharField(**field_kwargs)
+            elif field_type == 'EmailField':
+                attrs[field_name] = models.EmailField(**field_kwargs)
             elif field_type == 'TextField':
                 attrs[field_name] = models.TextField(**field_kwargs)
             elif field_type == 'DateTimeField':

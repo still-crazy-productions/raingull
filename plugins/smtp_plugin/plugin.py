@@ -3,17 +3,44 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import logging
+from django.utils import timezone
+import os
 
 logger = logging.getLogger(__name__)
 
-class SMTPPlugin:
+class Plugin:
     def __init__(self, plugin_model):
         self.plugin_model = plugin_model
-        self.manifest = plugin_model.get_manifest()
+        # Load manifest from file instead of trying to get it from plugin_model
+        manifest_path = os.path.join(os.path.dirname(__file__), 'manifest.json')
+        with open(manifest_path, 'r') as f:
+            self.manifest = json.load(f)
 
     def get_config(self, service_instance):
         """Get the configuration for a service instance"""
         return service_instance.config
+
+    def translate_from_raingull(self, raingull_message):
+        """
+        Translate a Raingull standard message to SMTP format
+        """
+        try:
+            # Extract the first recipient as the 'to' address
+            to_address = raingull_message.recipients[0] if raingull_message.recipients else None
+            
+            # Return the translated message data
+            return {
+                'raingull_id': raingull_message.raingull_id,
+                'to': to_address,
+                'subject': raingull_message.subject,
+                'body': raingull_message.body,
+                'headers': raingull_message.headers if hasattr(raingull_message, 'headers') else {},
+                'status': 'queued'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error translating message {raingull_message.raingull_id}: {str(e)}")
+            raise
 
     def send_message(self, service_instance, message_data):
         """

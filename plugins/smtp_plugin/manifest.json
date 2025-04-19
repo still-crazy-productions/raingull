@@ -11,13 +11,28 @@
         {"name": "username", "type": "string", "label": "SMTP Username", "required": true},
         {"name": "password", "type": "password", "label": "SMTP Password", "required": true}
     ],
+    "user_config_fields": [
+        {"name": "email_address", "type": "email", "label": "Email Address", "required": true}
+    ],
     "message_schemas": {
         "outgoing": {
-            "to": {"type": "CharField", "max_length": 255, "required": true},
+            "raingull_id": {"type": "UUIDField", "required": true},
+            "to": {"type": "EmailField", "max_length": 255, "required": true},
             "subject": {"type": "CharField", "max_length": 255, "required": true},
             "body": {"type": "TextField", "required": true},
-            "sent_at": {"type": "DateTimeField", "auto_now_add": true},
-            "status": {"type": "CharField", "max_length": 20, "choices": ["queued", "sending", "sent", "failed"], "default": "queued"}
+            "headers": {"type": "JSONField", "required": false},
+            "status": {"type": "CharField", "max_length": 20, "choices": ["queued", "sending", "sent", "failed"], "default": "queued"},
+            "created_at": {"type": "DateTimeField", "auto_now_add": true},
+            "sent_at": {"type": "DateTimeField", "required": false},
+            "error_message": {"type": "TextField", "required": false}
+        }
+    },
+    "translation_rules": {
+        "from_raingull": {
+            "to": "recipients[0]",
+            "subject": "subject",
+            "body": "body",
+            "headers": "headers"
         }
     }
 }
