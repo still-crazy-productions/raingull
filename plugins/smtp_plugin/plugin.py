@@ -9,8 +9,8 @@ import os
 logger = logging.getLogger(__name__)
 
 class Plugin:
-    def __init__(self, plugin_model):
-        self.plugin_model = plugin_model
+    def __init__(self, service_instance):
+        self.service_instance = service_instance
         # Load manifest from file instead of trying to get it from plugin_model
         manifest_path = os.path.join(os.path.dirname(__file__), 'manifest.json')
         with open(manifest_path, 'r') as f:

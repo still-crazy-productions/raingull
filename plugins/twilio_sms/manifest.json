@@ -1,0 +1,33 @@
+{
+    "plugin_name": "Twilio SMS",
+    "description": "Raingull Twilio SMS Plugin for sending SMS messages.",
+    "version": "0.1",
+    "incoming": false,
+    "outgoing": true,
+    "config_fields": [
+        {"name": "account_sid", "type": "string", "label": "Twilio Account SID", "required": true, "help_text": "Your Twilio Account SID from the Twilio Console"},
+        {"name": "auth_token", "type": "password", "label": "Twilio Auth Token", "required": true, "help_text": "Your Twilio Auth Token from the Twilio Console"},
+        {"name": "twilio_phone_number", "type": "string", "label": "Twilio Phone Number", "required": true, "help_text": "Your Twilio phone number in E.164 format (e.g., +1234567890)"}
+    ],
+    "user_config_fields": [
+        {"name": "phone_number", "type": "string", "label": "Phone Number", "required": true, "help_text": "Your phone number in E.164 format (e.g., +1234567890)"}
+    ],
+    "message_schemas": {
+        "outgoing": {
+            "raingull_id": {"type": "UUIDField", "required": true},
+            "to_number": {"type": "CharField", "max_length": 20, "required": true, "help_text": "Recipient phone number in E.164 format (e.g., +1234567890)"},
+            "body": {"type": "TextField", "required": true, "help_text": "SMS message content (max 1600 characters)"},
+            "status": {"type": "CharField", "max_length": 20, "choices": ["queued", "sending", "sent", "failed"], "default": "queued"},
+            "created_at": {"type": "DateTimeField", "auto_now_add": true},
+            "sent_at": {"type": "DateTimeField", "required": false},
+            "error_message": {"type": "TextField", "required": false},
+            "twilio_message_id": {"type": "CharField", "max_length": 255, "required": false, "help_text": "Twilio's message SID after sending"}
+        }
+    },
+    "translation_rules": {
+        "from_raingull": {
+            "to_number": "recipients[0]",
+            "body": "body"
+        }
+    }
+} 

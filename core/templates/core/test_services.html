@@ -16,8 +16,9 @@
                             <thead>
                                 <tr>
                                     <th>Friendly Name</th>
-                                    <th>Plugin Instance ID</th>
+                                    <th>Plugin</th>
                                     <th>Incoming Enabled</th>
+                                    <th>Outgoing Enabled</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -25,20 +26,72 @@
                                 {% for instance in service_instances %}
                                 <tr>
                                     <td>{{ instance.friendly_name }}</td>
-                                    <td>{{ instance.plugin_instance.id }}</td>
-                                    <td>{{ instance.plugin_instance.incoming_enabled|yesno:"Yes,No" }}</td>
                                     <td>
-                                        <!-- Debug output -->
-                                        Plugin name: {{ instance.plugin.name }}<br>
-                                        Plugin type: {{ instance.plugin.name|type }}<br>
-                                        <!-- End debug output -->
-                                        {% if instance.is_imap %}
-                                        <button class="btn btn-primary retrieve-messages" data-instance-id="{{ instance.id }}">
-                                            Retrieve Messages
-                                        </button>
-                                        <button class="btn btn-success translate-messages" data-instance-id="{{ instance.id }}">
-                                            Translate Messages
-                                        </button>
+                                        {{ instance.plugin.name }}
+                                        {% if instance._plugin_instance %}
+                                            <br><small class="text-muted">Instance ID: {{ instance.plugin_instance.id }}</small>
+                                        {% else %}
+                                            <br><small class="text-danger">No plugin instance loaded</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if instance._plugin_instance %}
+                                            {{ instance.incoming_enabled|yesno:"Yes,No" }}
+                                            {% if instance._supports_incoming %}
+                                                <br><small class="text-success">Plugin supports incoming</small>
+                                            {% else %}
+                                                <br><small class="text-muted">Plugin does not support incoming</small>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if instance._plugin_instance %}
+                                            {{ instance.outgoing_enabled|yesno:"Yes,No" }}
+                                            {% if instance._supports_outgoing %}
+                                                <br><small class="text-success">Plugin supports outgoing</small>
+                                            {% else %}
+                                                <br><small class="text-muted">Plugin does not support outgoing</small>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if instance._plugin_instance %}
+                                            {% if instance.plugin.name == 'imap_plugin' and instance.incoming_enabled and instance._supports_incoming %}
+                                            <button class="btn btn-primary retrieve-messages" data-instance-id="{{ instance.id }}">
+                                                Retrieve Messages
+                                            </button>
+                                            <button class="btn btn-success translate-messages" data-instance-id="{{ instance.id }}">
+                                                Translate Messages
+                                            </button>
+                                            {% endif %}
+                                            {% if instance.plugin.name == 'smtp_plugin' and instance.outgoing_enabled and instance._supports_outgoing %}
+                                            <button class="btn btn-info test-connection" data-instance-id="{{ instance.id }}">
+                                                Test Connection
+                                            </button>
+                                            <button class="btn btn-warning queue-messages" data-instance-id="{{ instance.id }}">
+                                                Queue Messages
+                                            </button>
+                                            <button class="btn btn-success send-messages" data-instance-id="{{ instance.id }}">
+                                                Send Messages
+                                            </button>
+                                            {% endif %}
+                                            {% if instance.plugin.name == 'twilio_sms' and instance.outgoing_enabled and instance._supports_outgoing %}
+                                            <button class="btn btn-info test-connection" data-instance-id="{{ instance.id }}">
+                                                Test Connection
+                                            </button>
+                                            <button class="btn btn-warning queue-messages" data-instance-id="{{ instance.id }}">
+                                                Queue Messages
+                                            </button>
+                                            <button class="btn btn-success send-messages" data-instance-id="{{ instance.id }}">
+                                                Send Messages
+                                            </button>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="text-muted">No actions available</span>
                                         {% endif %}
                                     </td>
                                 </tr>
@@ -132,6 +185,93 @@ $(document).ready(function() {
             },
             complete: function() {
                 button.prop('disabled', false).text('Translate Messages');
+            }
+        });
+    });
+
+    // Add click handler for Test Connection button
+    $('.test-connection').click(function() {
+        const instanceId = $(this).data('instance-id');
+        const button = $(this);
+        
+        button.prop('disabled', true).text('Testing...');
+        
+        $.ajax({
+            url: `/core/test/plugin/connection/${instanceId}/`,
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert(response.message);
+                } else {
+                    alert('Error: ' + response.message);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('Error: ' + error);
+            },
+            complete: function() {
+                button.prop('disabled', false).text('Test Connection');
+            }
+        });
+    });
+
+    // Add click handler for Queue Messages button
+    $('.queue-messages').click(function() {
+        const instanceId = $(this).data('instance-id');
+        const button = $(this);
+        
+        button.prop('disabled', true).text('Queueing...');
+        
+        $.ajax({
+            url: `/core/test/queue/${instanceId}/`,
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert(`Successfully queued ${response.count} messages!`);
+                } else {
+                    alert('Error: ' + response.error);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('Error: ' + error);
+            },
+            complete: function() {
+                button.prop('disabled', false).text('Queue Messages');
+            }
+        });
+    });
+
+    // Add click handler for Send Messages button
+    $('.send-messages').click(function() {
+        const instanceId = $(this).data('instance-id');
+        const button = $(this);
+        
+        button.prop('disabled', true).text('Sending...');
+        
+        $.ajax({
+            url: `/core/test/send/${instanceId}/`,
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert(`Successfully sent ${response.count} messages!`);
+                } else {
+                    alert('Error: ' + response.error);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('Error: ' + error);
+            },
+            complete: function() {
+                button.prop('disabled', false).text('Send Messages');
             }
         });
     });

@@ -223,18 +223,40 @@ def test_services(request):
     Test page for manually running service operations
     """
     # Get all service instances with their plugin instances
-    service_instances = ServiceInstance.objects.select_related('plugin').all()
+    service_instances = ServiceInstance.objects.select_related('plugin', 'plugin_instance').all()
     
     # Debug logging
     logger.debug(f"Found {len(service_instances)} service instances")
     for instance in service_instances:
         logger.debug(f"Instance: {instance.name}, Plugin: {instance.plugin.name}")
         try:
+            # Get the manifest first
             manifest = instance.plugin.get_manifest()
-            logger.debug(f"Manifest: {manifest}")
-            instance.plugin.manifest = manifest
+            if manifest:
+                instance.plugin.manifest = manifest
+                logger.debug(f"Manifest loaded: {manifest}")
+                
+                # Update instance capabilities based on manifest
+                instance._supports_incoming = manifest.get('incoming', False)
+                instance._supports_outgoing = manifest.get('outgoing', False)
+            else:
+                logger.error(f"Failed to load manifest for {instance.name}")
+                instance._supports_incoming = False
+                instance._supports_outgoing = False
+            
+            # Get the plugin instance
+            plugin_instance = instance.get_plugin_instance()
+            if plugin_instance:
+                # Store the plugin instance in a temporary attribute
+                instance._plugin_instance = plugin_instance
+                logger.debug(f"Plugin instance loaded: {plugin_instance}")
+            else:
+                logger.error(f"Failed to load plugin instance for {instance.name}")
+            
         except Exception as e:
-            logger.error(f"Error loading manifest for {instance.name}: {e}")
+            logger.error(f"Error loading plugin instance or manifest for {instance.name}: {e}")
+            instance._supports_incoming = False
+            instance._supports_outgoing = False
     
     # Get all users for the activation form
     users = RaingullUser.objects.all()

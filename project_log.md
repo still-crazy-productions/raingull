@@ -1,4 +1,4 @@
-## RainGull Project Log (Updated April 16, 2025)
+## Raingull Project Log (Updated April 16, 2025)
 
 ### ✅ Accomplishments:
 

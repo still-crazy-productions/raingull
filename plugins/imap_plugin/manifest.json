@@ -1,6 +1,6 @@
 {
   "plugin_name": "IMAP Plugin",
-  "description": "RainGull IMAP Plugin for receiving emails.",
+  "description": "Raingull IMAP Plugin for receiving emails.",
   "version": "0.1",
   "incoming": true,
   "outgoing": false,
