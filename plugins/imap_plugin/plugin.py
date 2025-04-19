@@ -1,6 +1,9 @@
 import json
 import imaplib
 from django.utils.module_loading import import_string
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Plugin:
     def __init__(self, service_instance):
@@ -193,6 +196,7 @@ class Plugin:
                                 # Create a new message record with fields from schema
                                 message = incoming_model(
                                     raingull_id=uuid.uuid4(),
+                                    message_id=message_id,  # Use the actual message ID
                                     imap_message_id=message_id,
                                     subject=msg.get('subject', ''),
                                     email_from=msg.get('from', ''),
@@ -236,3 +240,51 @@ class Plugin:
             return {"success": False, "message": f"IMAP error: {str(e)}"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    def connect(self):
+        """Connect to the IMAP server"""
+        try:
+            logger.info(f"Attempting to connect to IMAP server: {self.service_instance.config.get('imap_server')}:{self.service_instance.config.get('imap_port')} with encryption: {self.service_instance.config.get('encryption')}")
+            
+            if self.service_instance.config.get('encryption') == 'SSL/TLS':
+                self.imap = imaplib.IMAP4_SSL(self.service_instance.config.get('imap_server'), self.service_instance.config.get('imap_port'))
+            else:
+                self.imap = imaplib.IMAP4(self.service_instance.config.get('imap_server'), self.service_instance.config.get('imap_port'))
+                if self.service_instance.config.get('encryption') == 'STARTTLS':
+                    self.imap.starttls()
+            
+            logger.info("Connected to IMAP server, attempting login...")
+            self.imap.login(self.service_instance.config.get('username'), self.service_instance.config.get('password'))
+            logger.info("Login successful, selecting inbox folder...")
+            self.imap.select(self.service_instance.config.get('imap_inbox_folder', 'INBOX'))
+            
+        except Exception as e:
+            logger.error(f"IMAP connection error: {str(e)}")
+            raise
+
+    def store_message_in_database(self, message_data, service_instance):
+        """Store a message in the database using the incoming model."""
+        try:
+            # Get the incoming model for this service instance
+            incoming_model = self.get_incoming_model(service_instance)
+            
+            # Create a new message instance
+            message = incoming_model(
+                raingull_id=message_data['raingull_id'],
+                message_id=message_data['message_id'],  # Use message_id instead of imap_message_id
+                imap_message_id=message_data['imap_message_id'],
+                subject=message_data['subject'],
+                email_from=message_data['email_from'],
+                to=message_data['to'],
+                date=message_data['date'],
+                body=message_data['body'],
+                headers=message_data.get('headers', {}),
+                status='new'
+            )
+            
+            # Save the message
+            message.save()
+            return True
+        except Exception as e:
+            logger.error(f"Error storing message in database: {str(e)}")
+            return False

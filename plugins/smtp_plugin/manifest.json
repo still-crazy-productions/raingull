@@ -16,7 +16,7 @@
     ],
     "message_schemas": {
         "outgoing": {
-            "raingull_id": {"type": "UUIDField", "required": true},
+            "raingull_id": {"type": "UUIDField", "required": true, "unique": true},
             "to": {"type": "EmailField", "max_length": 255, "required": true},
             "subject": {"type": "CharField", "max_length": 255, "required": true},
             "body": {"type": "TextField", "required": true},

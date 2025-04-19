@@ -1,10 +1,14 @@
 from django.contrib import admin
 from django import forms
 from django.contrib.auth.admin import UserAdmin
-from .models import UserProfile, Plugin, Message, RaingullStandardMessage, ServiceInstance, PluginInstance, UserServiceActivation, RaingullUser
+from .models import UserProfile, Plugin, Message, RaingullStandardMessage, ServiceInstance, PluginInstance, UserServiceActivation, RaingullUser, AuditLog
 import json
 from pathlib import Path
 from .forms import ServiceInstanceForm
+from django.utils import timezone
+from datetime import timedelta
+from django.db import models
+from django.db.models import Count
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -193,3 +197,54 @@ class RaingullUserAdmin(UserAdmin):
     list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups')
     search_fields = ('username', 'first_name', 'last_name', 'email')
     ordering = ('username',)
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ('timestamp', 'service_instance', 'event_type', 'status', 'details')
+    list_filter = ('event_type', 'status', 'service_instance')
+    search_fields = ('details', 'service_instance__name')
+    date_hierarchy = 'timestamp'
+    change_list_template = 'admin/core/auditlog/change_list.html'
+    readonly_fields = ('timestamp', 'service_instance', 'event_type', 'status', 'details')
+    
+    def has_add_permission(self, request):
+        return False  # Prevent manual creation of audit logs
+    
+    def has_delete_permission(self, request, obj=None):
+        return False  # Prevent deletion of audit logs
+    
+    def has_change_permission(self, request, obj=None):
+        return False  # Prevent modification of audit logs
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        
+        # Get 24-hour activity summary
+        twenty_four_hours_ago = timezone.now() - timedelta(hours=24)
+        
+        # Get recent activity by type
+        recent_activity = AuditLog.objects.filter(
+            timestamp__gte=twenty_four_hours_ago
+        ).values('event_type').annotate(count=Count('id')).order_by('-count')
+        
+        # Get service activity
+        service_activity = AuditLog.objects.filter(
+            timestamp__gte=twenty_four_hours_ago
+        ).values('service_instance__name').annotate(count=Count('id')).order_by('-count')
+        
+        # Get error count
+        error_count = AuditLog.objects.filter(
+            timestamp__gte=twenty_four_hours_ago,
+            status='error'
+        ).count()
+        
+        extra_context.update({
+            'recent_activity': recent_activity,
+            'service_activity': service_activity,
+            'error_count': error_count,
+        })
+        
+        return super().changelist_view(request, extra_context=extra_context)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('service_instance')

@@ -101,3 +101,20 @@ git push origin main
 
 ## 2024-03-20
 // ... existing code ...
+
+## 2025-04-19
+- Fixed IMAP Plugin issues:
+  - Added proper message ID tracking to prevent duplicate processing
+  - Improved message processing logic to ensure each message is only processed once
+  - Fixed message ID handling in database storage
+- Fixed SMTP Plugin issues:
+  - Added unique constraint to raingull_id field to prevent duplicate entries
+  - Identified and documented database consistency issues
+- Identified need for database cleanup and rebuild:
+  - Multiple copies of messages in processed folder
+  - Duplicate entries in SMTP outgoing table
+  - Inconsistent message queue entries
+- Next steps:
+  - Rebuild database from scratch
+  - Test IMAP and SMTP integration with clean state
+  - Implement additional safeguards against duplicate processing

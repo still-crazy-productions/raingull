@@ -2,7 +2,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
-from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue
+from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue, AuditLog
 from core.forms import DynamicServiceInstanceForm, ServiceInstanceForm
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -10,11 +10,12 @@ from django.utils.module_loading import import_string
 import json
 import os
 import imaplib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from django.utils import timezone
 import logging
 from django.contrib.auth.models import User
+from django.db.models import Count
 
 logger = logging.getLogger(__name__)
 
@@ -761,3 +762,38 @@ def send_queued_messages(request, instance_id):
             'success': False,
             'message': f'Error: {str(e)}'
         })
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def audit_log(request):
+    """
+    View for displaying the audit log with statistics
+    """
+    # Get 24-hour activity summary
+    twenty_four_hours_ago = timezone.now() - timedelta(hours=24)
+    
+    # Get recent activity by type
+    recent_activity = AuditLog.objects.filter(
+        timestamp__gte=twenty_four_hours_ago
+    ).values('event_type').annotate(count=Count('id')).order_by('-count')
+    
+    # Get service activity
+    service_activity = AuditLog.objects.filter(
+        timestamp__gte=twenty_four_hours_ago
+    ).values('service_instance__name').annotate(count=Count('id')).order_by('-count')
+    
+    # Get error count
+    error_count = AuditLog.objects.filter(
+        timestamp__gte=twenty_four_hours_ago,
+        status='error'
+    ).count()
+    
+    # Get all audit logs
+    audit_logs = AuditLog.objects.select_related('service_instance').order_by('-timestamp')
+    
+    return render(request, 'core/audit_log.html', {
+        'recent_activity': recent_activity,
+        'service_activity': service_activity,
+        'error_count': error_count,
+        'audit_logs': audit_logs,
+    })

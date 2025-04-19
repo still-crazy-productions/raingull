@@ -131,3 +131,31 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Custom user model
 AUTH_USER_MODEL = 'core.RaingullUser'
+
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Celery Beat Configuration
+CELERY_BEAT_SCHEDULE = {
+    'poll-imap-services': {
+        'task': 'core.tasks.poll_imap_services',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+    'process-incoming-messages': {
+        'task': 'core.tasks.process_incoming_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+    'distribute-outgoing-messages': {
+        'task': 'core.tasks.distribute_outgoing_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+    'process-outgoing-messages': {
+        'task': 'core.tasks.process_outgoing_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+}

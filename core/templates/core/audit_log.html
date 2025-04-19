@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Audit Log</h1>
+    
+    <!-- 24-Hour Activity Summary -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h2>24-Hour Activity Summary</h2>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-4">
+                    <h3>Recent Activity by Type</h3>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Event Type</th>
+                                <th>Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for activity in recent_activity %}
+                            <tr>
+                                <td>{{ activity.event_type }}</td>
+                                <td>{{ activity.count }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-md-4">
+                    <h3>Service Activity</h3>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Service</th>
+                                <th>Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for activity in service_activity %}
+                            <tr>
+                                <td>{{ activity.service_instance__name }}</td>
+                                <td>{{ activity.count }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-md-4">
+                    <h3>Error Summary</h3>
+                    <div class="alert alert-danger">
+                        <h4>Total errors in last 24 hours: {{ error_count }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audit Log Table -->
+    <div class="card">
+        <div class="card-header">
+            <h2>Audit Log Entries</h2>
+        </div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Service</th>
+                        <th>Event Type</th>
+                        <th>Status</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in audit_logs %}
+                    <tr>
+                        <td>{{ log.timestamp }}</td>
+                        <td>{{ log.service_instance.name|default:"System" }}</td>
+                        <td>{{ log.event_type }}</td>
+                        <td>
+                            <span class="badge {% if log.status == 'error' %}bg-danger{% elif log.status == 'warning' %}bg-warning{% else %}bg-success{% endif %}">
+                                {{ log.status }}
+                            </span>
+                        </td>
+                        <td>{{ log.details }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %} 

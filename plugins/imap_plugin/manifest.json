@@ -18,6 +18,7 @@
   "message_schemas": {
     "incoming": {
       "raingull_id": {"type": "UUIDField", "required": true},
+      "message_id": {"type": "CharField", "max_length": 255, "required": true, "unique": true},
       "imap_message_id": {"type": "CharField", "max_length": 255, "required": true},
       "subject": {"type": "CharField", "max_length": 255, "required": true},
       "email_from": {"type": "CharField", "max_length": 255, "required": true},
@@ -28,5 +29,11 @@
       "status": {"type": "CharField", "max_length": 20, "required": true, "default": "new"},
       "processed_at": {"type": "DateTimeField", "required": false}
     }
+  },
+  "translation_rules": {
+    "sender": "email_from",
+    "recipient": "to",
+    "subject": "subject",
+    "body": "body"
   }
 }

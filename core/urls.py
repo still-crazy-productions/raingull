@@ -20,4 +20,5 @@ urlpatterns = [
     path('test/service-config-fields/<int:instance_id>/', views.get_service_config_fields, name='get_service_config_fields'),
     path('test/activate-service/', views.activate_service, name='activate_service'),
     path('test/send/<int:instance_id>/', views.send_queued_messages, name='send_queued_messages'),
+    path('audit/', views.audit_log, name='audit_log'),
 ]

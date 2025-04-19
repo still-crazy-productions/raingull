@@ -84,18 +84,18 @@ class Plugin(models.Model):
             try:
                 model = apps.get_model('core', model_name)
                 if model:
-                    print(f"Found existing model {model_name}")
+                    logger.info(f"Found existing model {model_name}")
                     return model
             except LookupError:
                 # Model not found, create it
                 pass
 
             # Create the model without trying to create the table
-            print(f"Creating model for existing table {table_name}")
-            return create_dynamic_model(model_name, table_name, schema, create_table=False)
+            logger.info(f"Creating model for existing table {table_name}")
+            return create_dynamic_model(model_name, schema, table_name, app_label='core')
 
         except Exception as e:
-            print(f"Error creating message model for {self.name}: {e}")
+            logger.error(f"Error creating message model for {self.name}: {e}")
             return None
 
 class PluginInstance(models.Model):
@@ -179,16 +179,11 @@ def update_plugin_instance(sender, instance, **kwargs):
 @receiver(post_save, sender=ServiceInstance)
 def create_message_tables(sender, instance, created, **kwargs):
     """
-    Creates dynamic tables for the service instance when it's created.
+    Creates dynamic tables for storing messages when a service instance is created.
     """
     try:
-        logger.info(f"Creating message tables for service instance {instance.name} (plugin: {instance.plugin.name})")
         manifest = instance.plugin.get_manifest()
-        logger.info(f"Loaded manifest: {manifest}")
-        
         if manifest and 'message_schemas' in manifest:
-            logger.info(f"Found message schemas: {manifest['message_schemas']}")
-            
             # Create incoming table if plugin supports incoming
             if manifest.get('incoming', False):
                 incoming_schema = manifest['message_schemas'].get('incoming', {})
@@ -202,8 +197,20 @@ def create_message_tables(sender, instance, created, **kwargs):
                         cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
                         logger.info(f"Dropped existing table {table_name}")
                     
+                    # Add message_id field with unique constraint if not present
+                    if 'message_id' not in incoming_schema:
+                        incoming_schema['message_id'] = {
+                            'type': 'CharField',
+                            'max_length': 255,
+                            'unique': True,
+                            'required': True,
+                            'help_text': 'Unique identifier for the message'
+                        }
+                    else:
+                        incoming_schema['message_id']['unique'] = True
+                    
                     # Create new table
-                    create_dynamic_model(model_name, table_name, incoming_schema)
+                    create_dynamic_model(model_name, incoming_schema, table_name, app_label='core')
                     logger.info(f"Created new table {table_name}")
             
             # Create outgoing table if plugin supports outgoing
@@ -219,8 +226,20 @@ def create_message_tables(sender, instance, created, **kwargs):
                         cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
                         logger.info(f"Dropped existing table {table_name}")
                     
+                    # Add message_id field with unique constraint if not present
+                    if 'message_id' not in outgoing_schema:
+                        outgoing_schema['message_id'] = {
+                            'type': 'CharField',
+                            'max_length': 255,
+                            'unique': True,
+                            'required': True,
+                            'help_text': 'Unique identifier for the message'
+                        }
+                    else:
+                        outgoing_schema['message_id']['unique'] = True
+                    
                     # Create new table
-                    create_dynamic_model(model_name, table_name, outgoing_schema)
+                    create_dynamic_model(model_name, outgoing_schema, table_name, app_label='core')
                     logger.info(f"Created new table {table_name}")
                 else:
                     logger.warning(f"No outgoing schema found in manifest for {instance.plugin.name}")
@@ -386,3 +405,35 @@ class OutgoingMessageQueue(models.Model):
             models.Index(fields=['user', 'service_instance']),
         ]
         db_table = 'core_outgoingmessagequeue'
+
+class AuditLog(models.Model):
+    EVENT_TYPE_CHOICES = [
+        ('info', 'Information'),
+        ('warning', 'Warning'),
+        ('error', 'Error'),
+        ('debug', 'Debug')
+    ]
+    
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('error', 'Error'),
+        ('warning', 'Warning')
+    ]
+    
+    timestamp = models.DateTimeField(auto_now_add=True)
+    service_instance = models.ForeignKey(ServiceInstance, on_delete=models.SET_NULL, null=True)
+    event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    details = models.TextField()
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['timestamp']),
+            models.Index(fields=['service_instance']),
+            models.Index(fields=['event_type']),
+            models.Index(fields=['status']),
+        ]
+        ordering = ['-timestamp']
+    
+    def __str__(self):
+        return f"{self.timestamp} - {self.event_type} - {self.status}"
