@@ -21,4 +21,6 @@ urlpatterns = [
     path('test/activate-service/', views.activate_service, name='activate_service'),
     path('test/send-queued/', views.send_queued_messages, name='send_queued_messages'),
     path('audit/', views.audit_log, name='audit_log'),
+    path('profile/', views.user_profile, name='user_profile'),
+    path('plugins/', views.plugin_manager, name='plugin_manager'),
 ]

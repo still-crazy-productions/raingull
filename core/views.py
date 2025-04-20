@@ -3,7 +3,6 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
 from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue, AuditLog
-from core.forms import DynamicServiceInstanceForm, ServiceInstanceForm
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.module_loading import import_string
@@ -16,6 +15,8 @@ from django.utils import timezone
 import logging
 from django.contrib.auth.models import User
 from django.db.models import Count
+import pytz
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,17 @@ logger = logging.getLogger(__name__)
 def service_instance_list(request):
     instances = ServiceInstance.objects.select_related('plugin').all()
     plugins = Plugin.objects.filter(enabled=True)
+    
+    # Set plugin capabilities for each instance
+    for instance in instances:
+        manifest = instance.plugin.get_manifest()
+        if manifest:
+            instance._supports_incoming = manifest.get('incoming', False)
+            instance._supports_outgoing = manifest.get('outgoing', False)
+        else:
+            instance._supports_incoming = False
+            instance._supports_outgoing = False
+    
     return render(request, 'core/service_instance_list.html', {
         'instances': instances,
         'plugins': plugins
@@ -138,29 +150,29 @@ def manage_service_instance(request, instance_id=None):
             print(f"Error importing views for {instance.plugin.name}")
             has_test_connection = False
     
-    # Create the form with the instance data
-    form = DynamicServiceInstanceForm(request.POST or None, instance=instance)
-    
-    # If plugin doesn't support outgoing, remove the outgoing_enabled field
-    if manifest and not manifest.get('outgoing', False):
-        form.fields.pop('outgoing_enabled', None)
-    
     if request.method == 'POST':
         print("Form data:", request.POST)
-        if form.is_valid():
-            print("Form is valid")
-            print("Cleaned data:", form.cleaned_data)
-            instance = form.save()
-            print("Instance saved")
-            print("New config:", instance.config)
+        # Handle the POST data directly
+        if instance:
+            instance.name = request.POST.get('name')
+            instance.incoming_enabled = request.POST.get('incoming_enabled') == 'on'
+            instance.outgoing_enabled = request.POST.get('outgoing_enabled') == 'on'
+            
+            # Update config
+            config = {}
+            for key, value in request.POST.items():
+                if key.startswith('config_'):
+                    config[key[7:]] = value
+            instance.config = config
+            
+            instance.save()
             messages.success(request, 'Service instance saved successfully.')
             return redirect('core:service_instance_list')
         else:
-            print("Form errors:", form.errors)
-            messages.error(request, 'Please correct the errors below.')
+            messages.error(request, 'Instance not found.')
+            return redirect('core:service_instance_list')
     
     return render(request, 'core/manage_service_instance.html', {
-        'form': form,
         'instance': instance,
         'manifest': manifest,
         'has_test_connection': has_test_connection,
@@ -823,4 +835,116 @@ def audit_log(request):
         'service_activity': service_activity,
         'error_count': error_count,
         'audit_logs': audit_logs,
+    })
+
+@login_required
+def user_profile(request):
+    if request.method == 'POST':
+        # Handle form submission
+        full_name = request.POST.get('full_name')
+        timezone = request.POST.get('timezone')
+        email = request.POST.get('email')
+        current_password = request.POST.get('current_password')
+        new_password = request.POST.get('new_password')
+        confirm_password = request.POST.get('confirm_password')
+        mfa_enabled = request.POST.get('mfa_enabled') == 'on'
+
+        # Update basic info
+        request.user.full_name = full_name
+        request.user.timezone = timezone
+        request.user.email = email
+
+        # Handle password change if provided
+        if current_password and new_password and confirm_password:
+            if request.user.check_password(current_password):
+                if new_password == confirm_password:
+                    request.user.set_password(new_password)
+                else:
+                    messages.error(request, "New passwords do not match")
+            else:
+                messages.error(request, "Current password is incorrect")
+
+        # Handle MFA
+        if mfa_enabled and not request.user.mfa_enabled:
+            # Generate new MFA secret
+            request.user.mfa_secret = generate_mfa_secret()
+        elif not mfa_enabled and request.user.mfa_enabled:
+            request.user.mfa_secret = ''
+
+        request.user.mfa_enabled = mfa_enabled
+        request.user.save()
+
+        messages.success(request, "Profile updated successfully")
+        return redirect('core:user_profile')
+
+    # Get all available timezones
+    timezones = pytz.common_timezones
+
+    return render(request, 'core/user_profile.html', {
+        'timezones': timezones
+    })
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def plugin_manager(request):
+    plugins_dir = os.path.join(settings.BASE_DIR, 'plugins')
+    installed_plugins = {p.name: p for p in Plugin.objects.all()}
+    available_plugins = []
+
+    # Scan plugins directory
+    if os.path.exists(plugins_dir):
+        for plugin_name in os.listdir(plugins_dir):
+            plugin_path = os.path.join(plugins_dir, plugin_name)
+            manifest_path = os.path.join(plugin_path, 'manifest.json')
+            
+            if os.path.isdir(plugin_path) and os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, 'r') as f:
+                        manifest = json.load(f)
+                        
+                    plugin_info = {
+                        'name': plugin_name,
+                        'friendly_name': manifest.get('friendly_name', plugin_name),
+                        'description': manifest.get('description', 'No description available'),
+                        'version': manifest.get('version', '1.0.0'),
+                        'incoming': manifest.get('incoming', False),
+                        'outgoing': manifest.get('outgoing', False),
+                        'enabled': plugin_name in installed_plugins,
+                        'plugin': installed_plugins.get(plugin_name)
+                    }
+                    available_plugins.append(plugin_info)
+                except json.JSONDecodeError:
+                    continue
+
+    # Handle POST request to enable/disable plugins
+    if request.method == 'POST':
+        plugin_name = request.POST.get('plugin_name')
+        action = request.POST.get('action')
+        
+        if plugin_name and action:
+            if action == 'enable':
+                if plugin_name not in installed_plugins:
+                    Plugin.objects.create(
+                        name=plugin_name,
+                        friendly_name=available_plugins[0]['friendly_name'],
+                        description=available_plugins[0]['description'],
+                        enabled=True
+                    )
+                    messages.success(request, f'Plugin {plugin_name} enabled successfully.')
+                else:
+                    plugin = installed_plugins[plugin_name]
+                    plugin.enabled = True
+                    plugin.save()
+                    messages.success(request, f'Plugin {plugin_name} enabled successfully.')
+            elif action == 'disable':
+                if plugin_name in installed_plugins:
+                    plugin = installed_plugins[plugin_name]
+                    plugin.enabled = False
+                    plugin.save()
+                    messages.success(request, f'Plugin {plugin_name} disabled successfully.')
+            
+            return redirect('core:plugin_manager')
+
+    return render(request, 'core/plugin_manager.html', {
+        'plugins': available_plugins
     })

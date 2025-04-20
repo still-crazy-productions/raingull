@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - Raingull{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="md:grid md:grid-cols-3 md:gap-6">
+        <div class="md:col-span-1">
+            <div class="px-4 sm:px-0">
+                <h3 class="text-lg font-medium leading-6 text-gray-900">Profile Settings</h3>
+                <p class="mt-1 text-sm text-gray-600">
+                    Update your account information and preferences.
+                </p>
+            </div>
+        </div>
+        <div class="mt-5 md:mt-0 md:col-span-2">
+            <form method="post" action="{% url 'core:user_profile' %}">
+                {% csrf_token %}
+                <div class="shadow sm:rounded-md sm:overflow-hidden">
+                    <div class="px-4 py-5 bg-white space-y-6 sm:p-6">
+                        <!-- Personal Information -->
+                        <div>
+                            <h4 class="text-lg font-medium text-gray-900 mb-4">Personal Information</h4>
+                            <div class="grid grid-cols-6 gap-6">
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="full_name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                                    <input type="text" name="full_name" id="full_name" value="{{ user.full_name }}"
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="timezone" class="block text-sm font-medium text-gray-700">Timezone</label>
+                                    <select id="timezone" name="timezone"
+                                        class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                        {% for tz in timezones %}
+                                        <option value="{{ tz }}" {% if tz == user.timezone %}selected{% endif %}>{{ tz }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                                    <input type="email" name="email" id="email" value="{{ user.email }}"
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Password Change -->
+                        <div class="border-t border-gray-200 pt-6">
+                            <h4 class="text-lg font-medium text-gray-900 mb-4">Change Password</h4>
+                            <div class="grid grid-cols-6 gap-6">
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="current_password" class="block text-sm font-medium text-gray-700">Current Password</label>
+                                    <input type="password" name="current_password" id="current_password"
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="new_password" class="block text-sm font-medium text-gray-700">New Password</label>
+                                    <input type="password" name="new_password" id="new_password"
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <label for="confirm_password" class="block text-sm font-medium text-gray-700">Confirm New Password</label>
+                                    <input type="password" name="confirm_password" id="confirm_password"
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- MFA Settings -->
+                        <div class="border-t border-gray-200 pt-6">
+                            <h4 class="text-lg font-medium text-gray-900 mb-4">Two-Factor Authentication</h4>
+                            <div class="flex items-center">
+                                <input type="checkbox" name="mfa_enabled" id="mfa_enabled" {% if user.mfa_enabled %}checked{% endif %}
+                                    class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                <label for="mfa_enabled" class="ml-2 block text-sm text-gray-900">
+                                    Enable Two-Factor Authentication
+                                </label>
+                            </div>
+                            {% if user.mfa_enabled %}
+                            <div class="mt-4">
+                                <p class="text-sm text-gray-500">
+                                    Two-factor authentication is currently enabled. You can disable it by unchecking the box above.
+                                </p>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="px-4 py-3 bg-gray-50 text-right sm:px-6">
+                        <button type="submit"
+                            class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %} 

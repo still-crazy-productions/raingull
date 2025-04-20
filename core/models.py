@@ -368,26 +368,93 @@ class UserServiceActivation(models.Model):
         return f"{self.user.username} - {self.service_instance.name}"
 
 class RaingullUser(AbstractUser):
-    class Meta:
-        verbose_name = 'User'
-        verbose_name_plural = 'Users'
+    class UserRole(models.TextChoices):
+        MEMBER = 'member', 'Member'
+        MODERATOR = 'moderator', 'Moderator'
+        ADMIN = 'admin', 'Admin'
 
-    groups = models.ManyToManyField(
-        'auth.Group',
-        verbose_name='groups',
-        blank=True,
-        help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.',
-        related_name='raingull_user_set',
-        related_query_name='raingull_user',
+    class AccountStatus(models.TextChoices):
+        ACTIVE = 'active', 'Active'
+        DEACTIVATED = 'deactivated', 'Deactivated'
+        BANNED = 'banned', 'Banned'
+
+    role = models.CharField(
+        max_length=20,
+        choices=UserRole.choices,
+        default=UserRole.MEMBER,
+        help_text="User's role in the system"
     )
-    user_permissions = models.ManyToManyField(
-        'auth.Permission',
-        verbose_name='user permissions',
-        blank=True,
-        help_text='Specific permissions for this user.',
-        related_name='raingull_user_set',
-        related_query_name='raingull_user',
+    
+    status = models.CharField(
+        max_length=20,
+        choices=AccountStatus.choices,
+        default=AccountStatus.ACTIVE,
+        help_text="Account status"
     )
+    
+    full_name = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User's full name"
+    )
+    
+    timezone = models.CharField(
+        max_length=50,
+        default='UTC',
+        help_text="User's preferred timezone"
+    )
+    
+    mfa_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether MFA is enabled for this user"
+    )
+    
+    mfa_secret = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text="MFA secret key"
+    )
+    
+    last_login_ip = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text="IP address of last login"
+    )
+    
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When the account was created"
+    )
+    
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text="When the account was last updated"
+    )
+
+    def __str__(self):
+        return f"{self.username} ({self.get_role_display()})"
+
+    @property
+    def is_moderator(self):
+        return self.role in [self.UserRole.MODERATOR, self.UserRole.ADMIN]
+
+    @property
+    def is_admin(self):
+        return self.role == self.UserRole.ADMIN
+
+    def can_manage_user(self, target_user):
+        """Check if this user can manage the target user"""
+        if self.is_admin:
+            return True
+        if self.is_moderator and target_user.role == self.UserRole.MEMBER:
+            return True
+        return False
+
+    def can_manage_service(self, service_instance):
+        """Check if this user can manage the service instance"""
+        if self.is_admin:
+            return True
+        return service_instance.user == self
 
 class OutgoingMessageQueue(models.Model):
     STATUS_CHOICES = [
