@@ -27,4 +27,5 @@ urlpatterns = [
     path('users/', views.user_list, name='user_list'),
     path('users/invite/', views.invite_user, name='invite_user'),
     path('users/activate/<str:token>/', views.activate_user, name='activate_user'),
+    path('users/delete/<int:user_id>/', views.delete_user, name='delete_user'),
 ]

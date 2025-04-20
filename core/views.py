@@ -25,6 +25,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 import secrets
 import uuid
+from django.urls import reverse
 
 logger = logging.getLogger(__name__)
 
@@ -608,20 +609,28 @@ def test_smtp_translate(request, instance_id):
 def get_service_config_fields(request, instance_id):
     """Get configuration fields for a service instance."""
     try:
+        print(f"Getting config fields for instance {instance_id}")
         service_instance = ServiceInstance.objects.get(id=instance_id)
+        print(f"Found service instance: {service_instance.name}")
+        
         manifest = service_instance.plugin.get_manifest()
+        print(f"Manifest: {manifest}")
+        
         config_fields = manifest.get('user_config_fields', [])
+        print(f"User config fields: {config_fields}")
         
         return JsonResponse({
             'success': True,
             'fields': config_fields
         })
     except ServiceInstance.DoesNotExist:
+        print(f"Service instance {instance_id} not found")
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
         })
     except Exception as e:
+        print(f"Error getting config fields: {str(e)}")
         return JsonResponse({
             'success': False,
             'message': str(e)
@@ -1064,138 +1073,108 @@ def user_list(request):
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def invite_user(request):
-    """View for inviting new users."""
-    # Get all outgoing-enabled service instances
-    service_instances = ServiceInstance.objects.filter(
-        outgoing_enabled=True,
-        plugin__enabled=True
-    ).select_related('plugin')
-
     if request.method == 'POST':
-        # Get form data
         service_instance_id = request.POST.get('service_instance')
         first_name = request.POST.get('first_name')
         last_name = request.POST.get('last_name')
+        enable_web_login = request.POST.get('enable_web_login') == 'on'
         is_superuser = request.POST.get('is_superuser') == 'on'
         is_staff = request.POST.get('is_staff') == 'on'
 
         try:
             service_instance = ServiceInstance.objects.get(id=service_instance_id)
+            plugin = service_instance.plugin
             
-            # Get the plugin's user config fields
-            manifest = service_instance.plugin.get_manifest()
+            # Get the email address from the form
+            manifest = plugin.get_manifest()
             user_config_fields = manifest.get('user_config_fields', [])
+            email_field = next((field for field in user_config_fields if field["name"] == "email_address"), None)
+            if not email_field:
+                raise ValueError("Email address field not found in plugin configuration")
+            recipient_email = request.POST.get(f'config_{email_field["name"]}')
             
-            # Build config from form data
-            config = {}
-            for field in user_config_fields:
-                field_name = field['name']
-                config[field_name] = request.POST.get(f'config_{field_name}')
-            
-            # Generate a unique username based on the service-specific identifier
-            username = config.get('email_address', f"{first_name.lower()}.{last_name.lower()}")
-            
-            # Create inactive user
-            user = RaingullUser.objects.create(
-                username=username,
+            # Create a new user (initially disabled and web-disabled)
+            user = RaingullUser.objects.create_user(
+                username=f"{first_name.lower()}.{last_name.lower()}",
                 first_name=first_name,
                 last_name=last_name,
+                is_active=False,
+                web_login_enabled=False,  # Initially disabled
                 is_superuser=is_superuser,
-                is_staff=is_staff,
+                is_staff=is_staff
+            )
+
+            # Create a disabled UserServiceActivation
+            activation = UserServiceActivation.objects.create(
+                user=user,
+                service_instance=service_instance,
                 is_active=False
             )
 
-            # Generate activation token
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            activation_token = f"{uid}-{token}"  # Combine uid and token
+            # Generate activation tokens
+            service_activation_token = default_token_generator.make_token(user)
+            web_activation_token = default_token_generator.make_token(user) if enable_web_login else None
 
-            # Create service activation with config
-            UserServiceActivation.objects.create(
-                user=user,
-                service_instance=service_instance,
-                config=config,
-                is_active=True
-            )
-
-            # Get or create invitation message
-            try:
-                invitation_message = ServiceMessageTemplate.objects.get(service_instance=service_instance)
-            except ServiceMessageTemplate.DoesNotExist:
-                # Create default message if none exists
-                invitation_message = ServiceMessageTemplate.objects.create(
-                    service_instance=service_instance,
-                    subject="Welcome to Raingull",
-                    message="""Hello {first_name},
-
-You have been invited to join Raingull. To activate your account, please click the link below:
-
-{activation_url}
-
-Once activated, you will be able to receive messages through this service.
-
-Best regards,
-The Raingull Team""",
-                    activation_url=f"{request.scheme}://{request.get_host()}/users/activate/{{token}}/"
-                )
-
-            # Format the message with user's information
-            formatted_message = invitation_message.message.format(
-                first_name=first_name,
-                activation_url=invitation_message.activation_url.format(token=activation_token)
-            )
-
-            # Generate a UUID for the message
-            message_id = str(uuid.uuid4())
-
-            # Create a minimal RaingullStandardMessage for the invitation
-            raingull_message = RaingullStandardMessage.objects.create(
+            # Create the invitation message
+            message_id = uuid.uuid4()
+            
+            # Create a minimal RaingullStandardMessage
+            message = RaingullStandardMessage.objects.create(
                 raingull_id=message_id,
                 source_service=service_instance,
-                source_message_id=message_id,
-                subject=invitation_message.subject,
-                body=formatted_message,  # Use the formatted message
-                sender=service_instance.config.get('from_email', 'noreply@raingull.com'),
-                recipients=[config['email_address']],
+                source_message_id=str(message_id),  # Use the same UUID as source_message_id
+                subject="Welcome to Raingull",
+                body=f"""
+Dear {first_name} {last_name},
+
+You have been invited to join Raingull through the {plugin.friendly_name} service.
+
+To activate your service account, click here:
+{request.build_absolute_uri(reverse('core:activate_service'))}?token={service_activation_token}
+
+{f'To create your web account, click here:\n{request.build_absolute_uri(reverse("core:activate_user", args=[web_activation_token]))}' if enable_web_login else ''}
+
+Best regards,
+The Raingull Team
+""",
+                sender=request.user.email,
+                recipients=[recipient_email],
                 date=timezone.now(),
                 headers={
                     'is_invitation': 'true',
-                    'recipient_email': config['email_address']
+                    'recipient_email': recipient_email,
+                    'bypass_distribution': 'true'
                 }
             )
 
-            # Get the outgoing message model
-            outgoing_model = service_instance.get_message_model('outgoing')
-            if outgoing_model:
-                # Create the service-specific outgoing message
-                outgoing_message = outgoing_model.objects.create(
-                    raingull_id=message_id,
-                    to=config['email_address'],
-                    subject=invitation_message.subject,
-                    body=formatted_message,  # Use the formatted message
-                    headers={},
-                    status='queued',
-                    created_at=timezone.now()
-                )
+            # Queue the message for sending
+            OutgoingMessageQueue.objects.create(
+                raingull_message=message,
+                service_instance=service_instance,
+                user=user,
+                raingull_id=message_id,
+                status='queued'
+            )
 
-                # Queue the message for sending
-                OutgoingMessageQueue.objects.create(
-                    raingull_message=raingull_message,
-                    user=user,
-                    service_instance=service_instance,
-                    raingull_id=message_id,
-                    status='queued'
-                )
-
-            messages.success(request, f"Invitation queued for {first_name} {last_name}")
+            messages.success(request, 'Invitation sent successfully!')
             return redirect('core:user_list')
 
         except Exception as e:
-            messages.error(request, f"Error sending invitation: {str(e)}")
+            messages.error(request, f'Error sending invitation: {str(e)}')
             return redirect('core:invite_user')
 
+    # Get all service instances with outgoing enabled
+    service_instances = ServiceInstance.objects.filter(outgoing_enabled=True)
+    
+    # Filter out instances where the plugin doesn't support outgoing messages
+    valid_instances = []
+    for instance in service_instances:
+        manifest = instance.plugin.get_manifest()
+        if manifest and manifest.get('outgoing', False):
+            valid_instances.append(instance)
+    
     return render(request, 'core/invite_user.html', {
-        'service_instances': service_instances
+        'service_instances': valid_instances
     })
 
 def activate_user(request, token):
@@ -1209,9 +1188,19 @@ def activate_user(request, token):
         user = RaingullUser.objects.get(pk=user_id)
         
         if default_token_generator.check_token(user, token):
-            user.is_active = True
-            user.save()
-            messages.success(request, "Your account has been activated. You can now log in.")
+            # Find and enable the service activation
+            service_activation = UserServiceActivation.objects.filter(
+                user=user,
+                is_active=False
+            ).first()
+            
+            if service_activation:
+                service_activation.is_active = True
+                service_activation.save()
+                messages.success(request, "Your service has been activated. You can now receive messages.")
+            else:
+                messages.error(request, "No pending service activation found.")
+            
             return redirect('login')
         else:
             messages.error(request, "Invalid activation link.")
@@ -1219,3 +1208,27 @@ def activate_user(request, token):
     except (TypeError, ValueError, OverflowError, RaingullUser.DoesNotExist):
         messages.error(request, "Invalid activation link.")
         return redirect('login')
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def delete_user(request, user_id):
+    """Delete a user and their associated service activations."""
+    if request.method == 'POST':
+        try:
+            user = get_object_or_404(RaingullUser, id=user_id)
+            
+            # Prevent deleting yourself
+            if user == request.user:
+                messages.error(request, "You cannot delete your own account.")
+                return redirect('core:user_list')
+            
+            # Delete the user (this will cascade to UserServiceActivation due to the ForeignKey)
+            user.delete()
+            messages.success(request, f"User {user.username} has been deleted successfully.")
+        except Exception as e:
+            messages.error(request, f"Error deleting user: {str(e)}")
+        
+        return redirect('core:user_list')
+    
+    # If not POST, redirect to user list
+    return redirect('core:user_list')

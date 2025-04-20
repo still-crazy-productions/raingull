@@ -368,68 +368,15 @@ class UserServiceActivation(models.Model):
         return f"{self.user.username} - {self.service_instance.name}"
 
 class RaingullUser(AbstractUser):
-    class UserRole(models.TextChoices):
-        MEMBER = 'member', 'Member'
-        MODERATOR = 'moderator', 'Moderator'
-        ADMIN = 'admin', 'Admin'
-
-    class AccountStatus(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        DEACTIVATED = 'deactivated', 'Deactivated'
-        BANNED = 'banned', 'Banned'
-
-    role = models.CharField(
-        max_length=20,
-        choices=UserRole.choices,
-        default=UserRole.MEMBER,
-        help_text="User's role in the system"
-    )
+    """Custom user model for Raingull."""
+    full_name = models.CharField(max_length=255, blank=True)
+    timezone = models.CharField(max_length=50, default='UTC')
+    mfa_enabled = models.BooleanField(default=False)
+    mfa_secret = models.CharField(max_length=32, blank=True)
+    web_login_enabled = models.BooleanField(default=False, help_text="Whether the user can log into the web interface")
     
-    status = models.CharField(
-        max_length=20,
-        choices=AccountStatus.choices,
-        default=AccountStatus.ACTIVE,
-        help_text="Account status"
-    )
-    
-    full_name = models.CharField(
-        max_length=255,
-        blank=True,
-        help_text="User's full name"
-    )
-    
-    timezone = models.CharField(
-        max_length=50,
-        default='UTC',
-        help_text="User's preferred timezone"
-    )
-    
-    mfa_enabled = models.BooleanField(
-        default=False,
-        help_text="Whether MFA is enabled for this user"
-    )
-    
-    mfa_secret = models.CharField(
-        max_length=32,
-        blank=True,
-        help_text="MFA secret key"
-    )
-    
-    last_login_ip = models.GenericIPAddressField(
-        null=True,
-        blank=True,
-        help_text="IP address of last login"
-    )
-    
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="When the account was created"
-    )
-    
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        help_text="When the account was last updated"
-    )
+    class Meta:
+        db_table = 'core_raingulluser'
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"

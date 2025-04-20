@@ -153,9 +153,22 @@ git push origin main
 - Fixed message distribution:
   - Added proper handling of invitation messages
   - Improved message queue handling for service-specific messages
+- Fixed dynamic fields not appearing in invite user form
+  - Moved JavaScript code from head block to extra_js block in invite_user.html
+  - Ensures DOM is fully loaded before executing JavaScript
+  - Maintains existing navigation menu functionality
+  - Improves user experience by properly loading service-specific fields
 
 ### 🚧 Next Steps:
 - Remove Django admin interface
 - Design and implement custom admin panel
 - Improve error handling for SMTP recipient validation
 - Consider implementing fallback SMTP service on send failure
+
+<div class="form-group">
+    <div class="custom-control custom-checkbox">
+        <input type="checkbox" class="custom-control-input" id="enable_web_login" name="enable_web_login">
+        <label class="custom-control-label" for="enable_web_login">Enable web login access</label>
+        <small class="form-text text-muted">If checked, the user will receive a link to access the web interface. If unchecked, they will only be able to receive messages.</small>
+    </div>
+</div>
