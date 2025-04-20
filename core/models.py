@@ -519,22 +519,61 @@ class AuditLog(models.Model):
     def __str__(self):
         return f"{self.timestamp} - {self.event_type} - {self.status}"
 
-class InvitationMessage(models.Model):
-    """Stores invitation message templates for different service instances."""
+class ServiceMessageTemplate(models.Model):
+    class MessageType(models.TextChoices):
+        INVITATION = 'invitation', 'Invitation'
+        ERROR = 'error', 'Error'
+        NOTIFICATION = 'notification', 'Notification'
+    
     service_instance = models.ForeignKey(ServiceInstance, on_delete=models.CASCADE)
+    message_type = models.CharField(max_length=20, choices=MessageType.choices)
     subject = models.CharField(max_length=200)
     message = models.TextField()
-    activation_url = models.URLField(help_text="URL for the activation link. Use {token} as a placeholder for the activation token.")
+    activation_url = models.URLField(null=True, blank=True, help_text="URL for the activation link. Use {token} as a placeholder for the activation token.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        unique_together = ('service_instance', 'message_type')
+        db_table = 'core_servicemessagetemplate'
+
     def __str__(self):
-        return f"Invitation message for {self.service_instance.name}"
+        return f"{self.service_instance.name} - {self.get_message_type_display()}"
 
     def get_message_with_token(self, token):
-        """Returns the message with the activation token inserted."""
-        return self.message.replace('{token}', token)
+        """Replace placeholders in the message with actual values."""
+        message = self.message
+        if self.activation_url:
+            message = message.replace('{activation_url}', self.get_activation_url(token))
+        return message
 
     def get_activation_url(self, token):
-        """Returns the activation URL with the token inserted."""
-        return self.activation_url.replace('{token}', token)
+        """Get the activation URL with the token."""
+        if self.activation_url:
+            return self.activation_url.format(token=token)
+        return None
+
+class SystemMessageTemplate(models.Model):
+    class MessageType(models.TextChoices):
+        PASSWORD_RESET = 'password_reset', 'Password Reset'
+        ADMIN_NOTIFICATION = 'admin_notification', 'Admin Notification'
+        SYSTEM_ERROR = 'system_error', 'System Error'
+    
+    message_type = models.CharField(max_length=20, choices=MessageType.choices, unique=True)
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'core_systemmessagetemplate'
+
+    def __str__(self):
+        return self.get_message_type_display()
+
+    def get_message_with_values(self, **kwargs):
+        """Replace placeholders in the message with actual values."""
+        message = self.message
+        for key, value in kwargs.items():
+            message = message.replace(f'{{{key}}}', str(value))
+        return message

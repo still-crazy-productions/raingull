@@ -356,6 +356,36 @@ def distribute_outgoing_messages():
         ).select_related('plugin')
         
         for message in messages:
+            # Skip invitation messages
+            if message.headers and message.headers.get('is_invitation') == 'true':
+                logger.info(f"Processing invitation message {message.raingull_id}")
+                # Get the intended recipient from headers
+                recipient_email = message.headers.get('recipient_email')
+                if not recipient_email:
+                    logger.warning(f"Invitation message {message.raingull_id} has no recipient_email in headers")
+                    continue
+                    
+                # Find the user with this email in their service activation
+                try:
+                    user_activation = UserServiceActivation.objects.get(
+                        config__email_address=recipient_email,
+                        service_instance=message.source_service,
+                        is_active=True
+                    )
+                    
+                    # Create queue entry only for this user
+                    OutgoingMessageQueue.objects.create(
+                        raingull_message=message,
+                        raingull_id=message.raingull_id,
+                        service_instance=message.source_service,
+                        user=user_activation.user,
+                        status='queued'
+                    )
+                    logger.info(f"Created invitation queue entry for {recipient_email}")
+                except UserServiceActivation.DoesNotExist:
+                    logger.warning(f"No active user found with email {recipient_email} for service {message.source_service.name}")
+                continue
+                
             for service in services:
                 try:
                     # Skip if this is the source service

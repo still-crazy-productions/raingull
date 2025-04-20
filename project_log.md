@@ -141,6 +141,18 @@ git push origin main
 - Successfully tested message distribution through multiple SMTP services
 - Verified correct handling of From addresses based on SMTP service configuration
 - Improved error handling and logging in SMTP message sending
+- Fixed user activation system:
+  - Properly combined user ID and token in activation URLs
+  - Fixed token validation in activation view
+  - Added proper error handling for invalid activation links
+- Improved invitation emails:
+  - Added dynamic field support based on service instance configuration
+  - Used service instance's configured sender email
+  - Fixed message template formatting to include user's first name
+  - Ensured activation links work correctly
+- Fixed message distribution:
+  - Added proper handling of invitation messages
+  - Improved message queue handling for service-specific messages
 
 ### 🚧 Next Steps:
 - Remove Django admin interface

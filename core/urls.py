@@ -25,4 +25,6 @@ urlpatterns = [
     path('profile/<int:user_id>/', views.user_profile, name='user_profile'),
     path('plugins/', views.plugin_manager, name='plugin_manager'),
     path('users/', views.user_list, name='user_list'),
+    path('users/invite/', views.invite_user, name='invite_user'),
+    path('users/activate/<str:token>/', views.activate_user, name='activate_user'),
 ]

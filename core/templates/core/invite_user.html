@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Invite User - Raingull{% endblock %}
+
+{% block head %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    function updateServiceFields() {
+        const serviceSelect = document.getElementById('service_instance');
+        const serviceFields = document.getElementById('service_fields');
+        const selectedOption = serviceSelect.options[serviceSelect.selectedIndex];
+        
+        // Clear existing service-specific fields
+        serviceFields.innerHTML = '';
+        
+        if (selectedOption.value) {
+            // Get the plugin name from the option text
+            const pluginName = selectedOption.text.split('(')[1].split(')')[0].trim();
+            
+            // Fetch the plugin's user config fields
+            fetch(`{% url 'core:get_plugin_fields' %}?plugin=${pluginName}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.fields) {
+                        data.fields.forEach(field => {
+                            const div = document.createElement('div');
+                            div.className = 'col-span-6 sm:col-span-4';
+                            
+                            const label = document.createElement('label');
+                            label.className = 'block text-sm font-medium text-gray-700';
+                            label.htmlFor = field.name;
+                            label.textContent = field.label || field.name;
+                            
+                            const input = document.createElement('input');
+                            input.type = field.type || 'text';
+                            input.name = `config_${field.name}`;
+                            input.id = field.name;
+                            input.required = field.required || false;
+                            input.className = 'mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md';
+                            
+                            div.appendChild(label);
+                            div.appendChild(input);
+                            serviceFields.appendChild(div);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching plugin fields:', error);
+                });
+        }
+    }
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="md:grid md:grid-cols-3 md:gap-6">
+        <div class="md:col-span-1">
+            <div class="px-4 sm:px-0">
+                <h3 class="text-lg font-medium leading-6 text-gray-900">Invite User</h3>
+                <p class="mt-1 text-sm text-gray-600">
+                    Send an invitation to a new user through one of your service instances.
+                </p>
+            </div>
+        </div>
+        <div class="mt-5 md:mt-0 md:col-span-2">
+            <form method="post" action="{% url 'core:invite_user' %}">
+                {% csrf_token %}
+                <div class="shadow sm:rounded-md sm:overflow-hidden">
+                    <div class="px-4 py-5 bg-white space-y-6 sm:p-6">
+                        <!-- Service Instance Selection -->
+                        <div>
+                            <label for="service_instance" class="block text-sm font-medium text-gray-700">Service Instance</label>
+                            <select id="service_instance" name="service_instance" required onchange="updateServiceFields()"
+                                class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                <option value="">Select a service instance...</option>
+                                {% for instance in service_instances %}
+                                    <option value="{{ instance.id }}">{{ instance.name }} ({{ instance.plugin.name }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <!-- User Information -->
+                        <div>
+                            <h4 class="text-lg font-medium text-gray-900 mb-4">User Information</h4>
+                            <div class="grid grid-cols-6 gap-6">
+                                <div class="col-span-6 sm:col-span-3">
+                                    <label for="first_name" class="block text-sm font-medium text-gray-700">First Name</label>
+                                    <input type="text" name="first_name" id="first_name" required
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-3">
+                                    <label for="last_name" class="block text-sm font-medium text-gray-700">Last Name</label>
+                                    <input type="text" name="last_name" id="last_name" required
+                                        class="mt-1 focus:ring-indigo-500 focus:border-indigo-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md">
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <div class="flex items-center">
+                                        <input type="checkbox" name="is_superuser" id="is_superuser"
+                                            class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                        <label for="is_superuser" class="ml-2 block text-sm text-gray-900">
+                                            Superuser
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="col-span-6 sm:col-span-4">
+                                    <div class="flex items-center">
+                                        <input type="checkbox" name="is_staff" id="is_staff"
+                                            class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                        <label for="is_staff" class="ml-2 block text-sm text-gray-900">
+                                            Staff
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Service-specific fields -->
+                        <div id="service_fields" class="grid grid-cols-6 gap-6">
+                            <!-- Dynamic fields will be added here -->
+                        </div>
+                    </div>
+                    <div class="px-4 py-3 bg-gray-50 text-right sm:px-6">
+                        <button type="submit"
+                            class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Send Invitation
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %} 

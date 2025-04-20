@@ -2,7 +2,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
-from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue, AuditLog
+from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue, AuditLog, ServiceMessageTemplate
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.module_loading import import_string
@@ -17,7 +17,14 @@ from django.contrib.auth.models import User
 from django.db.models import Count
 import pytz
 from django.conf import settings
-from django.template.loader import get_template
+from django.template.loader import get_template, render_to_string
+from django.core.mail import send_mail
+from django.utils.html import strip_tags
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+import secrets
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +59,12 @@ def get_plugin_fields(request):
     plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
     
     try:
-        # Import the plugin's manifest
-        manifest = import_string(f'plugins.{plugin.name}.manifest')
-        fields = manifest.get('config_fields', [])
+        # Get the plugin's manifest
+        manifest_path = os.path.join(settings.BASE_DIR, 'plugins', plugin.name, 'manifest.json')
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        
+        fields = manifest.get('user_config_fields', [])
         
         # Check if the plugin has a test connection function
         try:
@@ -67,8 +77,8 @@ def get_plugin_fields(request):
             'fields': fields,
             'has_test_connection': has_test_connection
         })
-    except ImportError:
-        return JsonResponse({'error': 'Plugin manifest not found'}, status=404)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        return JsonResponse({'error': f'Error loading plugin manifest: {str(e)}'}, status=404)
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -737,7 +747,7 @@ def queue_outgoing_messages(request, instance_id):
                         raingull_message=raingull_message,
                         user=activation.user,
                         service_instance=service_instance,
-                        service_message_id=str(message.raingull_id),
+                        raingull_id=raingull_message.raingull_id,  # Use the raingull_id from the standard message
                         status='queued'
                     )
                     queued_count += 1
@@ -1050,3 +1060,162 @@ def user_list(request):
     return render(request, 'core/user_list.html', {
         'users': users
     })
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def invite_user(request):
+    """View for inviting new users."""
+    # Get all outgoing-enabled service instances
+    service_instances = ServiceInstance.objects.filter(
+        outgoing_enabled=True,
+        plugin__enabled=True
+    ).select_related('plugin')
+
+    if request.method == 'POST':
+        # Get form data
+        service_instance_id = request.POST.get('service_instance')
+        first_name = request.POST.get('first_name')
+        last_name = request.POST.get('last_name')
+        is_superuser = request.POST.get('is_superuser') == 'on'
+        is_staff = request.POST.get('is_staff') == 'on'
+
+        try:
+            service_instance = ServiceInstance.objects.get(id=service_instance_id)
+            
+            # Get the plugin's user config fields
+            manifest = service_instance.plugin.get_manifest()
+            user_config_fields = manifest.get('user_config_fields', [])
+            
+            # Build config from form data
+            config = {}
+            for field in user_config_fields:
+                field_name = field['name']
+                config[field_name] = request.POST.get(f'config_{field_name}')
+            
+            # Generate a unique username based on the service-specific identifier
+            username = config.get('email_address', f"{first_name.lower()}.{last_name.lower()}")
+            
+            # Create inactive user
+            user = RaingullUser.objects.create(
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                is_superuser=is_superuser,
+                is_staff=is_staff,
+                is_active=False
+            )
+
+            # Generate activation token
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            activation_token = f"{uid}-{token}"  # Combine uid and token
+
+            # Create service activation with config
+            UserServiceActivation.objects.create(
+                user=user,
+                service_instance=service_instance,
+                config=config,
+                is_active=True
+            )
+
+            # Get or create invitation message
+            try:
+                invitation_message = ServiceMessageTemplate.objects.get(service_instance=service_instance)
+            except ServiceMessageTemplate.DoesNotExist:
+                # Create default message if none exists
+                invitation_message = ServiceMessageTemplate.objects.create(
+                    service_instance=service_instance,
+                    subject="Welcome to Raingull",
+                    message="""Hello {first_name},
+
+You have been invited to join Raingull. To activate your account, please click the link below:
+
+{activation_url}
+
+Once activated, you will be able to receive messages through this service.
+
+Best regards,
+The Raingull Team""",
+                    activation_url=f"{request.scheme}://{request.get_host()}/users/activate/{{token}}/"
+                )
+
+            # Format the message with user's information
+            formatted_message = invitation_message.message.format(
+                first_name=first_name,
+                activation_url=invitation_message.activation_url.format(token=activation_token)
+            )
+
+            # Generate a UUID for the message
+            message_id = str(uuid.uuid4())
+
+            # Create a minimal RaingullStandardMessage for the invitation
+            raingull_message = RaingullStandardMessage.objects.create(
+                raingull_id=message_id,
+                source_service=service_instance,
+                source_message_id=message_id,
+                subject=invitation_message.subject,
+                body=formatted_message,  # Use the formatted message
+                sender=service_instance.config.get('from_email', 'noreply@raingull.com'),
+                recipients=[config['email_address']],
+                date=timezone.now(),
+                headers={
+                    'is_invitation': 'true',
+                    'recipient_email': config['email_address']
+                }
+            )
+
+            # Get the outgoing message model
+            outgoing_model = service_instance.get_message_model('outgoing')
+            if outgoing_model:
+                # Create the service-specific outgoing message
+                outgoing_message = outgoing_model.objects.create(
+                    raingull_id=message_id,
+                    to=config['email_address'],
+                    subject=invitation_message.subject,
+                    body=formatted_message,  # Use the formatted message
+                    headers={},
+                    status='queued',
+                    created_at=timezone.now()
+                )
+
+                # Queue the message for sending
+                OutgoingMessageQueue.objects.create(
+                    raingull_message=raingull_message,
+                    user=user,
+                    service_instance=service_instance,
+                    raingull_id=message_id,
+                    status='queued'
+                )
+
+            messages.success(request, f"Invitation queued for {first_name} {last_name}")
+            return redirect('core:user_list')
+
+        except Exception as e:
+            messages.error(request, f"Error sending invitation: {str(e)}")
+            return redirect('core:invite_user')
+
+    return render(request, 'core/invite_user.html', {
+        'service_instances': service_instances
+    })
+
+def activate_user(request, token):
+    """View for activating a user account."""
+    try:
+        # Split the token into uid and token parts
+        uid, token = token.split('-', 1)
+        
+        # Decode the user ID
+        user_id = force_str(urlsafe_base64_decode(uid))
+        user = RaingullUser.objects.get(pk=user_id)
+        
+        if default_token_generator.check_token(user, token):
+            user.is_active = True
+            user.save()
+            messages.success(request, "Your account has been activated. You can now log in.")
+            return redirect('login')
+        else:
+            messages.error(request, "Invalid activation link.")
+            return redirect('login')
+    except (TypeError, ValueError, OverflowError, RaingullUser.DoesNotExist):
+        messages.error(request, "Invalid activation link.")
+        return redirect('login')
