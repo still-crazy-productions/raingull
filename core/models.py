@@ -100,7 +100,7 @@ class Plugin(models.Model):
 
 class PluginInstance(models.Model):
     service_instance = models.OneToOneField('ServiceInstance', on_delete=models.CASCADE, related_name='plugin_instance')
-    app_config = models.CharField(max_length=255)  # e.g., 'plugins.imap_plugin.apps.ImapPluginConfig'
+    app_config = models.CharField(max_length=255)  # e.g., 'plugins.imap.apps.ImapConfig'
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
@@ -518,3 +518,23 @@ class AuditLog(models.Model):
     
     def __str__(self):
         return f"{self.timestamp} - {self.event_type} - {self.status}"
+
+class InvitationMessage(models.Model):
+    """Stores invitation message templates for different service instances."""
+    service_instance = models.ForeignKey(ServiceInstance, on_delete=models.CASCADE)
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    activation_url = models.URLField(help_text="URL for the activation link. Use {token} as a placeholder for the activation token.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Invitation message for {self.service_instance.name}"
+
+    def get_message_with_token(self, token):
+        """Returns the message with the activation token inserted."""
+        return self.message.replace('{token}', token)
+
+    def get_activation_url(self, token):
+        """Returns the activation URL with the token inserted."""
+        return self.activation_url.replace('{token}', token)

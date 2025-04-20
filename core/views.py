@@ -17,6 +17,7 @@ from django.contrib.auth.models import User
 from django.db.models import Count
 import pytz
 from django.conf import settings
+from django.template.loader import get_template
 
 logger = logging.getLogger(__name__)
 
@@ -72,24 +73,56 @@ def get_plugin_fields(request):
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def create_service_instance(request):
-    if request.method == 'POST':
-        plugin_name = request.POST.get('plugin')
-        if not plugin_name:
-            return JsonResponse({'error': 'Plugin name is required'}, status=400)
-        
-        plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
-        
-        # Create a new service instance
-        instance = ServiceInstance(plugin=plugin, name=request.POST.get('name'))
-        
-        # Get the config fields from the manifest
-        try:
-            manifest_path = os.path.join('plugins', plugin.name, 'manifest.json')
-            with open(manifest_path, 'r') as f:
-                manifest = json.load(f)
-            config_fields = manifest.get('config_fields', [])
+    # Get plugin from URL parameter
+    plugin_id = request.GET.get('plugin')
+    plugin_name = request.GET.get('plugin_name')
+    
+    if not plugin_id and not plugin_name:
+        messages.error(request, 'No plugin specified')
+        return redirect('core:service_instance_list')
+    
+    try:
+        # Try to get plugin by ID first, then by name
+        if plugin_id:
+            plugin = get_object_or_404(Plugin, id=plugin_id, enabled=True)
+        else:
+            plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
+    except Plugin.DoesNotExist:
+        messages.error(request, 'Plugin not found or not enabled')
+        return redirect('core:service_instance_list')
+    
+    # Get the plugin's manifest
+    try:
+        manifest = plugin.get_manifest()
+        if not manifest:
+            messages.error(request, 'Could not load plugin manifest')
+            return redirect('core:service_instance_list')
             
-            # Build the config dictionary
+        config_fields = manifest.get('config_fields', [])
+        print(f"Debug: Plugin {plugin.name} config fields: {config_fields}")  # Debug log
+        
+        # Check if the plugin has a test connection function
+        try:
+            import_string(f'plugins.{plugin.name}.views.test_connection')
+            has_test_connection = True
+        except ImportError:
+            has_test_connection = False
+            
+    except Exception as e:
+        messages.error(request, f'Error loading plugin manifest: {str(e)}')
+        return redirect('core:service_instance_list')
+    
+    if request.method == 'POST':
+        try:
+            # Create new service instance
+            instance = ServiceInstance(
+                plugin=plugin,
+                name=request.POST.get('name'),
+                incoming_enabled=manifest.get('incoming', False),
+                outgoing_enabled=manifest.get('outgoing', False)
+            )
+            
+            # Build config dictionary
             config = {}
             for field in config_fields:
                 field_name = field['name']
@@ -98,37 +131,26 @@ def create_service_instance(request):
             instance.config = config
             instance.save()
             
-            messages.success(request, 'Service instance created successfully.')
+            messages.success(request, 'Service instance created successfully')
             return redirect('core:service_instance_list')
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            messages.error(request, f'Error loading plugin manifest: {str(e)}')
+            
+        except Exception as e:
+            messages.error(request, f'Error creating service instance: {str(e)}')
             return redirect('core:service_instance_list')
     
-    # GET request - show the form
-    plugin_name = request.GET.get('plugin')
-    if not plugin_name:
-        return redirect('core:service_instance_list')
-    
-    plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
-    
-    try:
-        manifest_path = os.path.join('plugins', plugin.name, 'manifest.json')
-        with open(manifest_path, 'r') as f:
-            manifest = json.load(f)
-        fields = manifest.get('config_fields', [])
-        
-        # Check if the plugin has a test connection function
-        views_path = os.path.join('plugins', plugin.name, 'views.py')
-        has_test_connection = os.path.exists(views_path) and 'test_connection' in open(views_path).read()
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        messages.error(request, f'Error loading plugin manifest: {str(e)}')
-        return redirect('core:service_instance_list')
-    
-    return render(request, 'core/create_service_instance.html', {
+    context = {
         'plugin': plugin,
-        'fields': fields,
+        'config_fields': config_fields,
+        'manifest': manifest,
         'has_test_connection': has_test_connection
-    })
+    }
+    print(f"Debug: Context being passed to template: {context}")  # Debug log
+    
+    # Force template reloading
+    template = get_template('core/create_service_instance.html')
+    print(f"Debug: Template path: {template.origin.name}")
+    
+    return render(request, 'core/create_service_instance.html', context)
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -137,6 +159,14 @@ def manage_service_instance(request, instance_id=None):
     
     # Get the plugin manifest to check capabilities
     manifest = instance.plugin.get_manifest() if instance else None
+    
+    # Get configuration fields from manifest
+    config_fields = []
+    if manifest:
+        config_fields = manifest.get('config_fields', [])
+        # Add current values to the fields
+        for field in config_fields:
+            field['value'] = instance.config.get(field['name'], '')
     
     # Check if the plugin has a test connection function
     has_test_connection = False
@@ -176,6 +206,7 @@ def manage_service_instance(request, instance_id=None):
         'instance': instance,
         'manifest': manifest,
         'has_test_connection': has_test_connection,
+        'config_fields': config_fields
     })
 
 @login_required
@@ -201,23 +232,65 @@ def test_plugin_connection(request, plugin_name):
         
         # Parse the JSON data from the request body
         print("Request body:", request.body)
-        data = json.loads(request.body)
-        print("Parsed data:", data)
+        try:
+            data = json.loads(request.body)
+            print("Parsed data:", data)
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON: {str(e)}")
+            return JsonResponse({
+                'success': False,
+                'message': f'Invalid JSON data: {str(e)}'
+            })
         
         # Call the plugin's test_connection function
         print("Calling test_connection function")
-        response = test_connection(request, data)
-        print("Test connection response:", response)
-        return response
+        try:
+            response = test_connection(request, data)
+            print("Test connection response:", response)
+            
+            # If the response is already a JsonResponse, return it directly
+            if isinstance(response, JsonResponse):
+                return response
+            # If it's a dictionary, convert it to a JsonResponse
+            elif isinstance(response, dict):
+                return JsonResponse(response)
+            # If it's a string, assume it's an error message
+            elif isinstance(response, str):
+                return JsonResponse({
+                    'success': False,
+                    'message': response
+                })
+            # For any other type, return an error
+            else:
+                print(f"Unexpected response type: {type(response)}")
+                return JsonResponse({
+                    'success': False,
+                    'message': 'Invalid response from plugin'
+                })
+                
+        except Exception as e:
+            print(f"Error in test_connection function: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            return JsonResponse({
+                'success': False,
+                'message': f'Error in test connection: {str(e)}'
+            })
+            
     except (ImportError, AttributeError) as e:
         print(f"Error loading test connection function: {str(e)}")
-        return JsonResponse({'success': False, 'message': f'Error loading test connection function: {str(e)}'})
-    except json.JSONDecodeError as e:
-        print(f"Invalid JSON data: {str(e)}")
-        return JsonResponse({'success': False, 'message': 'Invalid JSON data'})
+        return JsonResponse({
+            'success': False,
+            'message': f'Error loading test connection function: {str(e)}'
+        })
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
-        return JsonResponse({'success': False, 'message': str(e)})
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        return JsonResponse({
+            'success': False,
+            'message': f'Unexpected error: {str(e)}'
+        })
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -398,7 +471,7 @@ def test_smtp_send(request, instance_id):
         # Get messages that have been processed by IMAP but not by SMTP
         unprocessed_messages = RaingullStandardMessage.objects.filter(
             source_service__isnull=False,  # Has been processed by some service
-            source_service__plugin__name='imap_plugin'  # Specifically by IMAP
+            source_service__plugin__name='imap'  # Specifically by IMAP
         ).exclude(
             source_service=service_instance  # But not by this SMTP service
         )
@@ -838,8 +911,23 @@ def audit_log(request):
     })
 
 @login_required
-def user_profile(request):
+def user_profile(request, user_id=None):
+    # If user_id is provided, get that user's profile
+    # Otherwise, use the current user's profile
+    if user_id:
+        if not request.user.is_superuser:
+            messages.error(request, "You don't have permission to view other users' profiles.")
+            return redirect('core:my_profile')
+        profile_user = get_object_or_404(RaingullUser, id=user_id)
+    else:
+        profile_user = request.user
+
     if request.method == 'POST':
+        # Only allow updating your own profile
+        if profile_user != request.user:
+            messages.error(request, "You can only update your own profile.")
+            return redirect('core:user_profile', user_id=user_id)
+
         # Handle form submission
         full_name = request.POST.get('full_name')
         timezone = request.POST.get('timezone')
@@ -850,38 +938,40 @@ def user_profile(request):
         mfa_enabled = request.POST.get('mfa_enabled') == 'on'
 
         # Update basic info
-        request.user.full_name = full_name
-        request.user.timezone = timezone
-        request.user.email = email
+        profile_user.full_name = full_name
+        profile_user.timezone = timezone
+        profile_user.email = email
 
         # Handle password change if provided
         if current_password and new_password and confirm_password:
-            if request.user.check_password(current_password):
+            if profile_user.check_password(current_password):
                 if new_password == confirm_password:
-                    request.user.set_password(new_password)
+                    profile_user.set_password(new_password)
                 else:
                     messages.error(request, "New passwords do not match")
             else:
                 messages.error(request, "Current password is incorrect")
 
         # Handle MFA
-        if mfa_enabled and not request.user.mfa_enabled:
+        if mfa_enabled and not profile_user.mfa_enabled:
             # Generate new MFA secret
-            request.user.mfa_secret = generate_mfa_secret()
-        elif not mfa_enabled and request.user.mfa_enabled:
-            request.user.mfa_secret = ''
+            profile_user.mfa_secret = generate_mfa_secret()
+        elif not mfa_enabled and profile_user.mfa_enabled:
+            profile_user.mfa_secret = ''
 
-        request.user.mfa_enabled = mfa_enabled
-        request.user.save()
+        profile_user.mfa_enabled = mfa_enabled
+        profile_user.save()
 
         messages.success(request, "Profile updated successfully")
-        return redirect('core:user_profile')
+        return redirect('core:user_profile', user_id=user_id)
 
     # Get all available timezones
     timezones = pytz.common_timezones
 
     return render(request, 'core/user_profile.html', {
-        'timezones': timezones
+        'profile_user': profile_user,
+        'timezones': timezones,
+        'is_own_profile': profile_user == request.user
     })
 
 @login_required
@@ -924,13 +1014,16 @@ def plugin_manager(request):
         if plugin_name and action:
             if action == 'enable':
                 if plugin_name not in installed_plugins:
-                    Plugin.objects.create(
-                        name=plugin_name,
-                        friendly_name=available_plugins[0]['friendly_name'],
-                        description=available_plugins[0]['description'],
-                        enabled=True
-                    )
-                    messages.success(request, f'Plugin {plugin_name} enabled successfully.')
+                    # Find the plugin info for this plugin
+                    plugin_info = next((p for p in available_plugins if p['name'] == plugin_name), None)
+                    if plugin_info:
+                        Plugin.objects.create(
+                            name=plugin_name,
+                            friendly_name=plugin_info['friendly_name'],
+                            version=plugin_info['version'],
+                            enabled=True
+                        )
+                        messages.success(request, f'Plugin {plugin_name} enabled successfully.')
                 else:
                     plugin = installed_plugins[plugin_name]
                     plugin.enabled = True
@@ -947,4 +1040,13 @@ def plugin_manager(request):
 
     return render(request, 'core/plugin_manager.html', {
         'plugins': available_plugins
+    })
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def user_list(request):
+    """List all users in the system. Requires superuser permissions."""
+    users = RaingullUser.objects.all().order_by('username')
+    return render(request, 'core/user_list.html', {
+        'users': users
     })

@@ -7,37 +7,23 @@
 {{ block.super }}
 {% if has_test_connection %}
 <script>
-function debug(message) {
-    console.log(message);
-    const debugOutput = document.getElementById('debugOutput');
-    const debugText = document.getElementById('debugText');
-    debugOutput.style.display = 'block';
-    debugText.textContent += message + '\n';
-}
-
 function testConnection() {
-    debug('Test connection button clicked');
-    
     const form = document.getElementById('serviceForm');
     if (!form) {
-        debug('Form not found!');
+        console.error('Form not found!');
         return;
     }
     
     const formData = new FormData(form);
     const config = {};
     
-    debug('Form data:');
     for (const [key, value] of formData.entries()) {
-        debug(`${key}: ${value}`);
         if (key.startsWith('config_')) {
             config[key.replace('config_', '')] = value;
         }
     }
     
-    debug('Sending request...');
-    
-    fetch(`/core/services/test/{{ instance.plugin.name }}/`, {
+    fetch(`/services/test/{{ instance.plugin.name }}/`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -46,11 +32,12 @@ function testConnection() {
         body: JSON.stringify(config)
     })
     .then(response => {
-        debug(`Response status: ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
         return response.json();
     })
     .then(data => {
-        debug(`Response data: ${JSON.stringify(data)}`);
         if (data.success) {
             alert('Connection test successful!');
         } else {
@@ -58,20 +45,16 @@ function testConnection() {
         }
     })
     .catch(error => {
-        debug('Error: ' + error.message);
+        console.error('Error:', error);
         alert('Error testing connection: ' + error.message);
     });
 }
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    debug('Page loaded');
     const testConnectionBtn = document.getElementById('testConnectionBtn');
     if (testConnectionBtn) {
-        debug('Test connection button found');
         testConnectionBtn.addEventListener('click', testConnection);
-    } else {
-        debug('Test connection button not found');
     }
 });
 </script>
@@ -90,205 +73,157 @@ debug('Test connection not available for this plugin');
 {% endblock %}
 
 {% block content %}
-<div class="container mt-4">
-    <h1>Manage Service Instance</h1>
-    
-    <div class="card">
-        <div class="card-body">
-            <form method="post" id="serviceForm">
-                {% csrf_token %}
-                
-                <div class="mb-3">
-                    <label for="{{ form.name.id_for_label }}" class="form-label">Name</label>
-                    {{ form.name }}
-                    {% if form.name.errors %}
-                        <div class="invalid-feedback d-block">
-                            {{ form.name.errors }}
-                        </div>
-                    {% endif %}
-                </div>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">Manage Service Instance</h1>
 
-                <div class="mb-3">
-                    <label for="{{ form.incoming_enabled.id_for_label }}" class="form-label">Incoming Enabled</label>
-                    {{ form.incoming_enabled }}
-                    {% if form.incoming_enabled.errors %}
-                        <div class="invalid-feedback d-block">
-                            {{ form.incoming_enabled.errors }}
-                        </div>
-                    {% endif %}
-                </div>
-
-                {% if form.outgoing_enabled %}
-                <div class="mb-3">
-                    <label for="{{ form.outgoing_enabled.id_for_label }}" class="form-label">Outgoing Enabled</label>
-                    {{ form.outgoing_enabled }}
-                    {% if form.outgoing_enabled.errors %}
-                        <div class="invalid-feedback d-block">
-                            {{ form.outgoing_enabled.errors }}
-                        </div>
-                    {% endif %}
-                </div>
-                {% endif %}
-
-                {% for field in form %}
-                    {% if field.name|slice:":7" == "config_" %}
-                        <div class="mb-3">
-                            <label for="{{ field.id_for_label }}" class="form-label">{{ field.label }}</label>
-                            {{ field }}
-                            {% if field.errors %}
-                                <div class="invalid-feedback d-block">
-                                    {{ field.errors }}
-                                </div>
-                            {% endif %}
-                            {% if field.help_text %}
-                                <div class="form-text">{{ field.help_text }}</div>
-                            {% endif %}
-                            {% if field.name == "config_password" %}
-                                <div class="form-text text-warning">
-                                    <i class="bi bi-exclamation-triangle"></i>
-                                    Note: You will need to re-enter the password to test the connection.
-                                </div>
-                            {% endif %}
-                        </div>
-                    {% endif %}
-                {% endfor %}
-
-                <div class="d-flex justify-content-between">
+    <form method="post" id="serviceForm" class="space-y-6">
+        {% csrf_token %}
+        
+        <div class="bg-white shadow rounded-lg">
+            <div class="px-4 py-5 sm:p-6">
+                <div class="grid grid-cols-1 gap-6">
                     <div>
-                        <a href="{% url 'core:service_instance_list' %}" class="btn btn-secondary">Cancel</a>
-                        <button type="button" class="btn btn-danger ms-2" data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
+                        <label class="block text-sm font-medium text-gray-700">Plugin</label>
+                        <input type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" value="{{ instance.plugin.friendly_name }}" readonly>
+                        <input type="hidden" name="plugin" value="{{ instance.plugin.name }}">
                     </div>
+
                     <div>
-                        {% if has_test_connection %}
-                            <button type="button" class="btn btn-info me-2" id="testConnectionBtn">Test Connection</button>
-                        {% endif %}
-                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                        <label for="name" class="block text-sm font-medium text-gray-700">Instance Name</label>
+                        <input type="text" id="name" name="name" value="{{ instance.name }}" required
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+
+                    {% for field in config_fields %}
+                        <div>
+                            <label for="config_{{ field.name }}" class="block text-sm font-medium text-gray-700">
+                                {{ field.label }}
+                                {% if field.required %}<span class="text-red-500">*</span>{% endif %}
+                            </label>
+
+                            {% if field.type == 'string' or field.type == 'text' or field.type == 'password' %}
+                                <input type="{{ field.type }}" 
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                       id="config_{{ field.name }}" 
+                                       name="config_{{ field.name }}" 
+                                       value="{{ field.value }}"
+                                       {% if field.required %}required{% endif %}>
+                            {% elif field.type == 'integer' or field.type == 'number' %}
+                                <input type="number" 
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                       id="config_{{ field.name }}" 
+                                       name="config_{{ field.name }}" 
+                                       value="{{ field.value }}"
+                                       {% if field.required %}required{% endif %}>
+                            {% elif field.type == 'select' %}
+                                <select class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                        id="config_{{ field.name }}" 
+                                        name="config_{{ field.name }}" 
+                                        {% if field.required %}required{% endif %}>
+                                    {% if field.options.0.value %}
+                                        {% for option in field.options %}
+                                            <option value="{{ option.value }}" {% if field.value == option.value %}selected{% endif %}>
+                                                {{ option.label }}
+                                            </option>
+                                        {% endfor %}
+                                    {% else %}
+                                        {% for option in field.options %}
+                                            <option value="{{ option }}" {% if field.value == option %}selected{% endif %}>
+                                                {{ option }}
+                                            </option>
+                                        {% endfor %}
+                                    {% endif %}
+                                </select>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+
+                    <div class="flex items-center">
+                        <input type="checkbox" id="incoming_enabled" name="incoming_enabled" 
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                               {% if instance.incoming_enabled %}checked{% endif %}>
+                        <label for="incoming_enabled" class="ml-2 block text-sm text-gray-900">
+                            Enable Incoming Messages
+                        </label>
+                    </div>
+
+                    <div class="flex items-center">
+                        <input type="checkbox" id="outgoing_enabled" name="outgoing_enabled"
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                               {% if instance.outgoing_enabled %}checked{% endif %}>
+                        <label for="outgoing_enabled" class="ml-2 block text-sm text-gray-900">
+                            Enable Outgoing Messages
+                        </label>
                     </div>
                 </div>
-            </form>
+
+                <div class="mt-6 flex space-x-4">
+                    <a href="{% url 'core:service_instance_list' %}" 
+                       class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Cancel
+                    </a>
+                    <button type="button" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                            onclick="document.getElementById('deleteModal').classList.remove('hidden')">
+                        Delete
+                    </button>
+                    {% if has_test_connection %}
+                        <button type="button" 
+                                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                id="testConnectionBtn">
+                            Test Connection
+                        </button>
+                    {% endif %}
+                    <button type="submit" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <!-- Delete Modal -->
+    <div id="deleteModal" class="fixed z-10 inset-0 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                                Confirm Deletion
+                            </h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500">
+                                    Are you sure you want to delete this service instance? This action cannot be undone.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <form method="post" action="{% url 'core:delete_service_instance' instance.id %}">
+                        {% csrf_token %}
+                        <button type="submit" 
+                                class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm">
+                            Delete
+                        </button>
+                    </form>
+                    <button type="button" 
+                            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                            onclick="document.getElementById('deleteModal').classList.add('hidden')">
+                        Cancel
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
-
-<!-- Delete Confirmation Modal -->
-<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="deleteModalLabel">Confirm Deletion</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                Are you sure you want to delete "{{ instance.name }}"? This action cannot be undone.
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <form method="post" action="{% url 'core:delete_service_instance' instance.id %}" class="d-inline">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-danger">Delete</button>
-                </form>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Debug info -->
-<div class="mt-4">
-    <pre>Debug Info:
-Plugin: {{ instance.plugin.name }}
-Has Test Connection: {{ has_test_connection }}
-Fields: {{ form.fields|length }}
-</pre>
-</div>
-
-<!-- Debug output -->
-<div id="debugOutput" class="mt-4 p-3 bg-light border rounded">
-    <h5>Debug Output</h5>
-    <pre id="debugText">Initializing...</pre>
-</div>
-{% endblock %}
-
-{% block extra_js %}
-{% if has_test_connection %}
-<script>
-function debug(message) {
-    console.log(message);
-    const debugOutput = document.getElementById('debugOutput');
-    const debugText = document.getElementById('debugText');
-    debugOutput.style.display = 'block';
-    debugText.textContent += message + '\n';
-}
-
-function testConnection() {
-    debug('Test connection button clicked');
-    
-    const form = document.getElementById('serviceForm');
-    if (!form) {
-        debug('Form not found!');
-        return;
-    }
-    
-    const formData = new FormData(form);
-    const config = {};
-    
-    debug('Form data:');
-    for (const [key, value] of formData.entries()) {
-        debug(`${key}: ${value}`);
-        if (key.startsWith('config_')) {
-            config[key.replace('config_', '')] = value;
-        }
-    }
-    
-    debug('Sending request...');
-    
-    fetch(`/core/services/test/{{ instance.plugin.name }}/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-        },
-        body: JSON.stringify(config)
-    })
-    .then(response => {
-        debug(`Response status: ${response.status}`);
-        return response.json();
-    })
-    .then(data => {
-        debug(`Response data: ${JSON.stringify(data)}`);
-        if (data.success) {
-            alert('Connection test successful!');
-        } else {
-            alert('Connection test failed: ' + data.message);
-        }
-    })
-    .catch(error => {
-        debug('Error: ' + error.message);
-        alert('Error testing connection: ' + error.message);
-    });
-}
-
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', function() {
-    debug('Page loaded');
-    const testConnectionBtn = document.getElementById('testConnectionBtn');
-    if (testConnectionBtn) {
-        debug('Test connection button found');
-        testConnectionBtn.addEventListener('click', testConnection);
-    } else {
-        debug('Test connection button not found');
-    }
-});
-</script>
-{% else %}
-<script>
-function debug(message) {
-    console.log(message);
-    const debugOutput = document.getElementById('debugOutput');
-    const debugText = document.getElementById('debugText');
-    debugOutput.style.display = 'block';
-    debugText.textContent += message + '\n';
-}
-debug('Test connection not available for this plugin');
-</script>
-{% endif %}
 {% endblock %} 

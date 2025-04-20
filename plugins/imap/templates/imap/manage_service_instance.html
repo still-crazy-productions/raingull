@@ -36,7 +36,7 @@ document.getElementById('test-connection').addEventListener('click', function(ev
         return;
     }
 
-    fetch("{% url 'core:test_plugin_connection' 'imap_plugin' %}", {
+    fetch("{% url 'core:test_plugin_connection' 'imap' %}", {
         method: 'POST',
         headers: {
             'X-CSRFToken': '{{ csrf_token }}',

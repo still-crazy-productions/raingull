@@ -35,7 +35,7 @@ def poll_imap_services():
     try:
         # Get all active IMAP service instances
         imap_services = ServiceInstance.objects.filter(
-            plugin__name='imap_plugin',
+            plugin__name='imap',
             incoming_enabled=True
         )
         

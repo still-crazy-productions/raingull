@@ -11,10 +11,41 @@
                 <p class="mt-1 text-sm text-gray-600">
                     Update your account information and preferences.
                 </p>
+                <div class="mt-4">
+                    <a href="#edit-form" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Edit Profile
+                    </a>
+                </div>
             </div>
         </div>
         <div class="mt-5 md:mt-0 md:col-span-2">
-            <form method="post" action="{% url 'core:user_profile' %}">
+            <div class="bg-white shadow overflow-hidden sm:rounded-lg mb-6">
+                <div class="px-4 py-5 sm:px-6">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">Profile Information</h3>
+                </div>
+                <div class="border-t border-gray-200 px-4 py-5 sm:px-6">
+                    <dl class="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2">
+                        <div class="sm:col-span-1">
+                            <dt class="text-sm font-medium text-gray-500">Full Name</dt>
+                            <dd class="mt-1 text-sm text-gray-900">{{ user.full_name }}</dd>
+                        </div>
+                        <div class="sm:col-span-1">
+                            <dt class="text-sm font-medium text-gray-500">Email</dt>
+                            <dd class="mt-1 text-sm text-gray-900">{{ user.email }}</dd>
+                        </div>
+                        <div class="sm:col-span-1">
+                            <dt class="text-sm font-medium text-gray-500">Timezone</dt>
+                            <dd class="mt-1 text-sm text-gray-900">{{ user.timezone }}</dd>
+                        </div>
+                        <div class="sm:col-span-1">
+                            <dt class="text-sm font-medium text-gray-500">Two-Factor Authentication</dt>
+                            <dd class="mt-1 text-sm text-gray-900">{{ user.mfa_enabled|yesno:"Enabled,Disabled" }}</dd>
+                        </div>
+                    </dl>
+                </div>
+            </div>
+
+            <form method="post" action="{% url 'core:my_profile' %}" id="edit-form">
                 {% csrf_token %}
                 <div class="shadow sm:rounded-md sm:overflow-hidden">
                     <div class="px-4 py-5 bg-white space-y-6 sm:p-6">

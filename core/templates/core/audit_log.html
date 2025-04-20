@@ -1,94 +1,108 @@
-{% extends "base.html" %}
-{% load static %}
+{% extends 'base.html' %}
 
 {% block content %}
-<div class="container mt-4">
-    <h1>Audit Log</h1>
-    
-    <!-- 24-Hour Activity Summary -->
-    <div class="card mb-4">
-        <div class="card-header">
-            <h2>24-Hour Activity Summary</h2>
-        </div>
-        <div class="card-body">
-            <div class="row">
-                <div class="col-md-4">
-                    <h3>Recent Activity by Type</h3>
-                    <table class="table">
-                        <thead>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">Audit Log</h1>
+
+    <div class="bg-white shadow rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Statistics</h2>
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div>
+                    <h3 class="text-sm font-medium text-gray-500">Total Messages</h3>
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
                             <tr>
-                                <th>Event Type</th>
-                                <th>Count</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Count</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for activity in recent_activity %}
-                            <tr>
-                                <td>{{ activity.event_type }}</td>
-                                <td>{{ activity.count }}</td>
-                            </tr>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for type, count in message_counts.items %}
+                                <tr>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ type }}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ count }}</td>
+                                </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
-                <div class="col-md-4">
-                    <h3>Service Activity</h3>
-                    <table class="table">
-                        <thead>
+
+                <div>
+                    <h3 class="text-sm font-medium text-gray-500">Service Status</h3>
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
                             <tr>
-                                <th>Service</th>
-                                <th>Count</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {% for activity in service_activity %}
-                            <tr>
-                                <td>{{ activity.service_instance__name }}</td>
-                                <td>{{ activity.count }}</td>
-                            </tr>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for service, status in service_status.items %}
+                                <tr>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ service }}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ status }}</td>
+                                </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
-                <div class="col-md-4">
-                    <h3>Error Summary</h3>
-                    <div class="alert alert-danger">
-                        <h4>Total errors in last 24 hours: {{ error_count }}</h4>
-                    </div>
+
+                <div>
+                    <h3 class="text-sm font-medium text-gray-500">Error Log</h3>
+                    {% if error_log %}
+                        <div class="rounded-md bg-red-50 p-4">
+                            <div class="flex">
+                                <div class="flex-shrink-0">
+                                    <svg class="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div class="ml-3">
+                                    <h3 class="text-sm font-medium text-red-800">Error</h3>
+                                    <div class="mt-2 text-sm text-red-700">
+                                        <p>{{ error_log }}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% else %}
+                        <p class="text-sm text-gray-500">No errors found.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Audit Log Table -->
-    <div class="card">
-        <div class="card-header">
-            <h2>Audit Log Entries</h2>
-        </div>
-        <div class="card-body">
-            <table class="table table-striped">
-                <thead>
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Recent Activity</h2>
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
                     <tr>
-                        <th>Timestamp</th>
-                        <th>Service</th>
-                        <th>Event Type</th>
-                        <th>Status</th>
-                        <th>Details</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody class="bg-white divide-y divide-gray-200">
                     {% for log in audit_logs %}
-                    <tr>
-                        <td>{{ log.timestamp }}</td>
-                        <td>{{ log.service_instance.name|default:"System" }}</td>
-                        <td>{{ log.event_type }}</td>
-                        <td>
-                            <span class="badge {% if log.status == 'error' %}bg-danger{% elif log.status == 'warning' %}bg-warning{% else %}bg-success{% endif %}">
-                                {{ log.status }}
-                            </span>
-                        </td>
-                        <td>{{ log.details }}</td>
-                    </tr>
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ log.timestamp }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ log.service }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ log.action }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    {% if log.status == 'error' %}bg-red-100 text-red-800
+                                    {% elif log.status == 'warning' %}bg-yellow-100 text-yellow-800
+                                    {% else %}bg-green-100 text-green-800{% endif %}">
+                                    {{ log.status }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{ log.details }}</td>
+                        </tr>
                     {% endfor %}
                 </tbody>
             </table>

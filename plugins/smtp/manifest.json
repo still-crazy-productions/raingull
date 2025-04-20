@@ -1,5 +1,6 @@
 {
-    "plugin_name": "SMTP Plugin",
+    "name": "smtp",
+    "friendly_name": "SMTP Plugin",
     "description": "Raingull SMTP Plugin for sending emails.",
     "version": "0.1",
     "incoming": false,
