@@ -7,6 +7,21 @@
 <div class="container mt-4">
     <h1>Test Services</h1>
     
+    <!-- Outgoing Message Queue Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Outgoing Message Queue</h5>
+        </div>
+        <div class="card-body">
+            <button class="btn btn-primary send-queued-messages">
+                Send Queued Messages
+            </button>
+            <div class="mt-2 result-container" id="result-queue">
+                <!-- Results will be displayed here -->
+            </div>
+        </div>
+    </div>
+    
     {% for instance in service_instances %}
     <div class="card mb-4">
         <div class="card-header">
@@ -217,6 +232,27 @@ document.addEventListener('DOMContentLoaded', function() {
             const resultContainer = document.getElementById(`result-${instanceId}`);
             
             fetch(`/core/test/queue/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                resultContainer.innerHTML = `<div class="alert ${data.success ? 'alert-success' : 'alert-danger'}">${data.message}</div>`;
+            })
+            .catch(error => {
+                resultContainer.innerHTML = `<div class="alert alert-danger">Error: ${error}</div>`;
+            });
+        });
+    });
+
+    // Handle Send Queued Messages button
+    document.querySelectorAll('.send-queued-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const resultContainer = document.getElementById('result-queue');
+            
+            fetch('/core/test/send-queued/', {
                 method: 'POST',
                 headers: {
                     'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value

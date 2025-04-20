@@ -2,6 +2,8 @@ import json
 import imaplib
 from django.utils.module_loading import import_string
 import logging
+import uuid
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +154,6 @@ class Plugin:
                         
                         # Parse the email
                         import email
-                        import uuid
-                        from django.utils import timezone
                         from email import policy
                         
                         # Parse with policy to handle modern email features
@@ -195,8 +195,8 @@ class Plugin:
                             try:
                                 # Create a new message record with fields from schema
                                 message = incoming_model(
-                                    raingull_id=uuid.uuid4(),
-                                    message_id=message_id,  # Use the actual message ID
+                                    raingull_id=uuid.uuid4(),  # Generate a new UUID for Raingull's tracking
+                                    message_id=message_id,  # Keep the original IMAP message ID
                                     imap_message_id=message_id,
                                     subject=msg.get('subject', ''),
                                     email_from=msg.get('from', ''),

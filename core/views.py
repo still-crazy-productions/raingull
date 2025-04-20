@@ -602,8 +602,27 @@ def queue_outgoing_messages(request, instance_id):
         if not service_instance.outgoing_enabled:
             return JsonResponse({
                 'success': False,
-                'message': 'Service instance does not have outgoing enabled'
+                'message': 'This service instance does not support outgoing messages'
             })
+
+        # Get the plugin instance
+        plugin = service_instance.get_plugin_instance()
+        if not plugin:
+            return JsonResponse({
+                'success': False,
+                'message': 'Could not create plugin instance'
+            })
+
+        # Get the outgoing message model
+        outgoing_model = service_instance.get_message_model('outgoing')
+        if not outgoing_model:
+            return JsonResponse({
+                'success': False,
+                'message': 'No outgoing message model found'
+            })
+
+        # Get all queued messages for this service
+        messages = outgoing_model.objects.filter(status='queued')
 
         # Get all active users for this service
         active_users = UserServiceActivation.objects.filter(
@@ -617,16 +636,6 @@ def queue_outgoing_messages(request, instance_id):
                 'message': 'No active users found for this service'
             })
 
-        # Get the outgoing message model
-        outgoing_model = service_instance.get_message_model('outgoing')
-        if not outgoing_model:
-            return JsonResponse({
-                'success': False,
-                'message': 'Could not get outgoing message model'
-            })
-
-        # Get all queued messages that haven't been processed
-        messages = outgoing_model.objects.filter(status='queued')
         queued_count = 0
 
         for message in messages:
@@ -643,7 +652,7 @@ def queue_outgoing_messages(request, instance_id):
                         raingull_message=raingull_message,
                         user=activation.user,
                         service_instance=service_instance,
-                        service_message_id=str(message.id),
+                        service_message_id=str(message.raingull_id),
                         status='queued'
                     )
                     queued_count += 1
@@ -672,95 +681,113 @@ def queue_outgoing_messages(request, instance_id):
         })
 
 @login_required
-def send_queued_messages(request, instance_id):
-    """Send queued messages through their service instances."""
+def send_queued_messages(request):
+    """Send messages from the OutgoingMessageQueue."""
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
-        if not service_instance.outgoing_enabled:
-            return JsonResponse({
-                'success': False,
-                'message': 'Service instance does not have outgoing enabled'
-            })
-
-        # Get the plugin instance
-        plugin_instance = service_instance.get_plugin_instance()
-        if not plugin_instance:
-            return JsonResponse({
-                'success': False,
-                'message': 'Could not create plugin instance'
-            })
-
-        # Get all queued messages for this service instance
+        # Get all queued messages
         queued_messages = OutgoingMessageQueue.objects.filter(
-            service_instance=service_instance,
             status='queued'
-        ).select_related('raingull_message', 'user')
-
-        if not queued_messages.exists():
+        ).select_related(
+            'raingull_message',
+            'user',
+            'service_instance'
+        )
+        
+        message_count = queued_messages.count()
+        if message_count == 0:
             return JsonResponse({
                 'success': True,
                 'message': 'No queued messages found'
             })
-
-        sent_count = 0
-        for queue_entry in queued_messages:
+            
+        logger.info(f"Found {message_count} queued messages to send")
+        
+        for message in queued_messages:
             try:
-                # Update status to processing
-                queue_entry.status = 'processing'
-                queue_entry.save()
-
+                # Get the plugin instance
+                plugin = message.service_instance.get_plugin_instance()
+                if not plugin:
+                    error_msg = f"Could not get plugin instance for {message.service_instance.name}"
+                    logger.error(error_msg)
+                    message.status = 'failed'
+                    message.error_message = error_msg
+                    message.save()
+                    continue
+                
+                # Get the user's service activation to get the correct email address
+                try:
+                    user_activation = UserServiceActivation.objects.get(
+                        user=message.user,
+                        service_instance=message.service_instance,
+                        is_active=True
+                    )
+                except UserServiceActivation.DoesNotExist:
+                    error_msg = f"User {message.user.username} is not activated for service {message.service_instance.name}"
+                    logger.error(error_msg)
+                    message.status = 'failed'
+                    message.error_message = error_msg
+                    message.save()
+                    continue
+                
                 # Get the service-specific message
-                outgoing_model = service_instance.get_message_model('outgoing')
+                outgoing_model = message.service_instance.get_message_model('outgoing')
                 service_message = outgoing_model.objects.get(
-                    raingull_id=queue_entry.raingull_message.raingull_id
+                    raingull_id=message.raingull_message.raingull_id
                 )
-
+                
+                # Get the recipient email from the user's service activation
+                recipient_email = user_activation.config.get('email_address')
+                if not recipient_email:
+                    error_msg = f"No email address configured for user {message.user.username}"
+                    logger.error(error_msg)
+                    message.status = 'failed'
+                    message.error_message = error_msg
+                    message.save()
+                    continue
+                
                 # Prepare message data for sending
                 message_data = {
-                    'to': service_message.to,
+                    'to': recipient_email,  # Use the email from user's service activation
                     'subject': service_message.subject,
                     'body': service_message.body,
-                    'headers': service_message.headers
+                    'headers': service_message.headers if hasattr(service_message, 'headers') else {}
                 }
-
-                # Send the message
-                result = plugin_instance.send_message(service_instance, message_data)
                 
-                if result:
-                    # Update queue entry status
-                    queue_entry.status = 'sent'
-                    queue_entry.processed_at = timezone.now()
-                    queue_entry.save()
-                    sent_count += 1
+                # Send the message
+                success = plugin.send_message(message.service_instance, message_data)
+                
+                # Update message status based on success
+                if success:
+                    message.status = 'sent'
+                    message.processed_at = timezone.now()
+                    message.save()
+                    logger.info(f"Successfully sent message to {recipient_email}")
                 else:
-                    # Update queue entry with error
-                    queue_entry.status = 'failed'
-                    queue_entry.error_message = 'Failed to send message'
-                    queue_entry.save()
-                    logger.error(f"Failed to send message {queue_entry.id}")
-
+                    error_msg = "Failed to send message"
+                    logger.error(error_msg)
+                    message.status = 'failed'
+                    message.error_message = error_msg
+                    message.save()
+                    
             except Exception as e:
-                logger.error(f"Error processing queue entry {queue_entry.id}: {e}")
-                queue_entry.status = 'failed'
-                queue_entry.error_message = str(e)
-                queue_entry.save()
+                error_msg = f"Error processing message: {e}"
+                logger.error(error_msg)
+                message.status = 'failed'
+                message.error_message = str(e)
+                message.save()
                 continue
-
+                
         return JsonResponse({
             'success': True,
-            'message': f'Successfully sent {sent_count} messages'
+            'message': f'Processed {message_count} queued messages'
         })
-
-    except ServiceInstance.DoesNotExist:
-        return JsonResponse({
-            'success': False,
-            'message': 'Service instance not found'
-        })
+        
     except Exception as e:
-        logger.error(f"Error in send_queued_messages: {e}")
+        error_msg = f"Error in send_queued_messages: {e}"
+        logger.error(error_msg)
         return JsonResponse({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': error_msg
         })
 
 @login_required

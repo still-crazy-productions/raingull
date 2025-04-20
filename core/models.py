@@ -209,6 +209,17 @@ def create_message_tables(sender, instance, created, **kwargs):
                     else:
                         incoming_schema['message_id']['unique'] = True
                     
+                    # Add raingull_id field with unique constraint if not present
+                    if 'raingull_id' not in incoming_schema:
+                        incoming_schema['raingull_id'] = {
+                            'type': 'UUIDField',
+                            'unique': True,
+                            'required': True,
+                            'help_text': 'Unique identifier for the message in Raingull system'
+                        }
+                    else:
+                        incoming_schema['raingull_id']['unique'] = True
+                    
                     # Create new table
                     create_dynamic_model(model_name, incoming_schema, table_name, app_label='core')
                     logger.info(f"Created new table {table_name}")
@@ -226,29 +237,24 @@ def create_message_tables(sender, instance, created, **kwargs):
                         cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
                         logger.info(f"Dropped existing table {table_name}")
                     
-                    # Add message_id field with unique constraint if not present
-                    if 'message_id' not in outgoing_schema:
-                        outgoing_schema['message_id'] = {
-                            'type': 'CharField',
-                            'max_length': 255,
+                    # Add raingull_id field with unique constraint if not present
+                    if 'raingull_id' not in outgoing_schema:
+                        outgoing_schema['raingull_id'] = {
+                            'type': 'UUIDField',
                             'unique': True,
                             'required': True,
-                            'help_text': 'Unique identifier for the message'
+                            'help_text': 'Unique identifier for the message in Raingull system'
                         }
                     else:
-                        outgoing_schema['message_id']['unique'] = True
+                        outgoing_schema['raingull_id']['unique'] = True
                     
                     # Create new table
                     create_dynamic_model(model_name, outgoing_schema, table_name, app_label='core')
                     logger.info(f"Created new table {table_name}")
-                else:
-                    logger.warning(f"No outgoing schema found in manifest for {instance.plugin.name}")
-            else:
-                logger.info(f"Plugin {instance.plugin.name} does not support outgoing messages")
-        else:
-            logger.warning(f"No message schemas found in manifest for {instance.plugin.name}")
+                    
     except Exception as e:
-        logger.error(f"Error creating message tables for {instance.name}: {e}", exc_info=True)
+        logger.error(f"Error creating message tables for {instance.name}: {str(e)}")
+        raise
 
 @receiver(post_delete, sender=ServiceInstance)
 def delete_message_tables(sender, instance, **kwargs):
@@ -301,8 +307,8 @@ def pre_delete_service_instance(sender, instance, **kwargs):
 
 class RaingullStandardMessage(models.Model):
     """Standardized message format for all incoming messages."""
-    raingull_id = models.UUIDField(primary_key=True, editable=False)  # No default, will be copied from source
-    source_service = models.ForeignKey(ServiceInstance, on_delete=models.CASCADE)
+    raingull_id = models.UUIDField(primary_key=True)  # Make raingull_id the primary key
+    source_service = models.ForeignKey('ServiceInstance', on_delete=models.CASCADE)
     source_message_id = models.CharField(max_length=255)
     subject = models.CharField(max_length=255)
     body = models.TextField()
@@ -310,11 +316,12 @@ class RaingullStandardMessage(models.Model):
     sender = models.CharField(max_length=255)
     recipients = models.JSONField()
     date = models.DateTimeField()
-    headers = models.JSONField()
+    headers = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = 'core_raingullstandardmessage'
         indexes = [
             models.Index(fields=['source_service', 'source_message_id']),
             models.Index(fields=['date']),
@@ -344,7 +351,7 @@ class RaingullStandardMessage(models.Model):
 
 class UserServiceActivation(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    service_instance = models.ForeignKey(ServiceInstance, on_delete=models.CASCADE)
+    service_instance = models.ForeignKey('ServiceInstance', on_delete=models.CASCADE)
     is_active = models.BooleanField(default=True)
     config = models.JSONField(default=dict)  # Store user-specific config like email address
     created_at = models.DateTimeField(auto_now_add=True)
@@ -390,19 +397,26 @@ class OutgoingMessageQueue(models.Model):
         ('failed', 'Failed')
     ]
     
+    # Foreign key to the original message - allows direct access to message data
     raingull_message = models.ForeignKey('RaingullStandardMessage', on_delete=models.CASCADE)
+    
+    # The tracking ID that follows the message through its lifecycle
+    # This is the same value as raingull_message.raingull_id
+    raingull_id = models.UUIDField()
+    
     user = models.ForeignKey('RaingullUser', on_delete=models.CASCADE)
     service_instance = models.ForeignKey('ServiceInstance', on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='queued')
-    service_message_id = models.CharField(max_length=255, null=True)  # Links to service-specific message
+    service_message_id = models.CharField(max_length=255, null=True, blank=True)  # Original service's message ID (e.g., IMAP message ID)
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True)
-    error_message = models.TextField(null=True)
+    error_message = models.TextField(null=True, blank=True)
     
     class Meta:
         indexes = [
             models.Index(fields=['status', 'created_at']),
             models.Index(fields=['user', 'service_instance']),
+            models.Index(fields=['raingull_id']),  # Add index for raingull_id
         ]
         db_table = 'core_outgoingmessagequeue'
 
