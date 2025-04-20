@@ -4,32 +4,18 @@
 {{ block.super }}
 {% if has_test_connection %}
 <script>
-function debug(message) {
-    console.log(message);
-    const debugOutput = document.getElementById('debugOutput');
-    const debugText = document.getElementById('debugText');
-    debugOutput.style.display = 'block';
-    debugText.textContent += message + '\n';
-}
-
 function testConnection() {
-    debug('Test connection button clicked');
-    
     const form = document.getElementById('serviceForm');
     const formData = new FormData(form);
     const config = {};
     
-    debug('Form data:');
     for (const [key, value] of formData.entries()) {
-        debug(`${key}: ${value}`);
         if (key.startsWith('config_')) {
             config[key.replace('config_', '')] = value;
         }
     }
     
-    debug('Sending test connection request...');
-    
-    fetch(`/core/services/test/{{ plugin.name }}/`, {
+    fetch(`/services/test/{{ plugin.name }}/`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -37,12 +23,8 @@ function testConnection() {
         },
         body: JSON.stringify(config)
     })
-    .then(response => {
-        debug(`Response status: ${response.status}`);
-        return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
-        debug(`Response data: ${JSON.stringify(data)}`);
         if (data.success) {
             alert('Connection test successful!');
         } else {
@@ -50,48 +32,23 @@ function testConnection() {
         }
     })
     .catch(error => {
-        debug('Error: ' + error.message);
         alert('Error testing connection: ' + error.message);
     });
 }
 
-// Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    debug('Page loaded');
     const testConnectionBtn = document.getElementById('testConnectionBtn');
     if (testConnectionBtn) {
-        debug('Test connection button found');
         testConnectionBtn.addEventListener('click', testConnection);
-    } else {
-        debug('Test connection button not found');
     }
 });
-</script>
-{% else %}
-<script>
-function debug(message) {
-    console.log(message);
-    const debugOutput = document.getElementById('debugOutput');
-    const debugText = document.getElementById('debugText');
-    debugOutput.style.display = 'block';
-    debugText.textContent += message + '\n';
-}
-debug('Test connection not available for this plugin');
 </script>
 {% endif %}
 {% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
     <h1 class="text-2xl font-bold text-gray-900 mb-6">Add New Service</h1>
-
-    <!-- Debug: Show raw context data -->
-    <div class="bg-yellow-50 p-4 rounded-md mb-6">
-        <h3 class="text-sm font-medium text-yellow-800">Debug: Raw Context Data</h3>
-        <pre class="mt-2 text-sm text-yellow-700">Plugin: {{ plugin|pprint }}
-Config Fields: {{ config_fields|pprint }}
-Manifest: {{ manifest|pprint }}</pre>
-    </div>
 
     <form method="post" id="serviceForm" class="space-y-6">
         {% csrf_token %}
@@ -108,20 +65,8 @@ Manifest: {{ manifest|pprint }}</pre>
                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
         </div>
 
-        <!-- Debug: Show config_fields loop -->
-        <div class="bg-blue-50 p-4 rounded-md mb-6">
-            <h3 class="text-sm font-medium text-blue-800">Debug: Config Fields Loop</h3>
-            <pre class="mt-2 text-sm text-blue-700">Number of fields: {{ config_fields|length }}</pre>
-        </div>
-
         {% for field in config_fields %}
-            <!-- Debug: Show each field -->
-            <div class="bg-green-50 p-4 rounded-md mb-4">
-                <h4 class="text-sm font-medium text-green-800">Debug: Field {{ forloop.counter }}</h4>
-                <pre class="mt-2 text-sm text-green-700">{{ field|pprint }}</pre>
-            </div>
-
-            <div class="border border-gray-200 p-4 rounded-md">
+            <div>
                 <label for="config_{{ field.name }}" class="block text-sm font-medium text-gray-700">
                     {{ field.label }}
                     {% if field.required %}<span class="text-red-500">*</span>{% endif %}
@@ -182,12 +127,5 @@ Manifest: {{ manifest|pprint }}</pre>
             </a>
         </div>
     </form>
-
-    <!-- Debug output -->
-    <div id="debugOutput" class="mt-4 p-4 bg-gray-100 rounded-md">
-        <h5 class="text-sm font-medium text-gray-700">Debug Output</h5>
-        <pre id="debugText" class="mt-2 text-sm">Initializing...</pre>
-    </div>
 </div>
-{% endblock %}
- 
+{% endblock %} 

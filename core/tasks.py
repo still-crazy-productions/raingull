@@ -1,6 +1,6 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import ServiceInstance, RaingullStandardMessage, AuditLog, OutgoingMessageQueue, Message, UserServiceActivation
+from .models import ServiceInstance, RaingullStandardMessage, AuditLog, OutgoingMessageQueue, UserServiceActivation
 from django.core.mail import send_mail
 from django.conf import settings
 from core.utils import get_imap_connection, get_smtp_connection
@@ -140,6 +140,9 @@ def process_outgoing_messages():
                         log_audit('error', error_msg, message.service_instance)
                         continue
                     
+                    # Check if this is an invitation message
+                    is_invitation = message.raingull_message.headers and message.raingull_message.headers.get('is_invitation') == 'true'
+                    
                     # Get the user's service activation
                     try:
                         user_activation = UserServiceActivation.objects.get(
@@ -148,13 +151,35 @@ def process_outgoing_messages():
                             is_active=True
                         )
                     except UserServiceActivation.DoesNotExist:
-                        error_msg = f"Step 4: User {message.user.username} is not activated for service {message.service_instance.name}"
-                        logger.error(error_msg)
-                        message.status = 'failed'
-                        message.error_message = error_msg
-                        message.save()
-                        log_audit('error', error_msg, message.service_instance)
-                        continue
+                        # If this is an invitation message, we can proceed without an active activation
+                        if is_invitation:
+                            # Try to get the existing activation (even if disabled)
+                            try:
+                                user_activation = UserServiceActivation.objects.get(
+                                    user=message.user,
+                                    service_instance=message.service_instance
+                                )
+                                # Temporarily enable it and update the config if needed
+                                user_activation.is_active = True
+                                if not user_activation.config.get('email_address'):
+                                    user_activation.config['email_address'] = message.raingull_message.headers.get('recipient_email')
+                                user_activation.save()
+                            except UserServiceActivation.DoesNotExist:
+                                # Create a new activation if none exists
+                                user_activation = UserServiceActivation.objects.create(
+                                    user=message.user,
+                                    service_instance=message.service_instance,
+                                    is_active=True,
+                                    config={'email_address': message.raingull_message.headers.get('recipient_email')}
+                                )
+                        else:
+                            error_msg = f"Step 4: User {message.user.username} is not activated for service {message.service_instance.name}"
+                            logger.error(error_msg)
+                            message.status = 'failed'
+                            message.error_message = error_msg
+                            message.save()
+                            log_audit('error', error_msg, message.service_instance)
+                            continue
                     
                     # Get the recipient email from the user's service activation
                     recipient_email = user_activation.config.get('email_address')
@@ -195,6 +220,11 @@ def process_outgoing_messages():
                             f"Step 4: Successfully sent message to {recipient_email} via {message.service_instance.name}",
                             message.service_instance
                         )
+                        
+                        # If this was a temporary activation for an invitation, disable it again
+                        if is_invitation:
+                            user_activation.is_active = False
+                            user_activation.save()
                     else:
                         error_msg = "Step 4: Failed to send message"
                         logger.error(error_msg)
@@ -202,6 +232,11 @@ def process_outgoing_messages():
                         message.error_message = error_msg
                         message.save()
                         log_audit('error', error_msg, message.service_instance)
+                        
+                        # If this was a temporary activation for an invitation, disable it again
+                        if is_invitation:
+                            user_activation.is_active = False
+                            user_activation.save()
                     
                 finally:
                     lock.release()
@@ -386,4 +421,16 @@ def distribute_outgoing_messages():
                 
     except Exception as e:
         logger.error(f"Error in distribute_outgoing_messages: {e}")
-        log_audit('error', f"Error in distribute_outgoing_messages: {e}") 
+        log_audit('error', f"Error in distribute_outgoing_messages: {e}")
+
+@shared_task
+def process_service_messages():
+    """Process service-specific messages (invitations, password resets, etc.)"""
+    try:
+        # This task is no longer needed as we're using ServiceMessageTemplate and OutgoingMessageQueue
+        # for all message handling now
+        pass
+                
+    except Exception as e:
+        logger.error(f"Error in process_service_messages: {e}")
+        log_audit('error', f"Error in process_service_messages: {e}") 

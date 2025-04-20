@@ -69,14 +69,16 @@ class Plugin(models.Model):
         try:
             manifest = self.get_manifest()
             if not manifest:
+                logger.error(f"Could not get manifest for plugin {self.name}")
                 return None
 
             # Get the appropriate schema based on direction
             schema = manifest.get('message_schemas', {}).get(direction, {})
             if not schema:
+                logger.error(f"No {direction} message schema found in manifest for plugin {self.name}")
                 return None
 
-            # Create a unique model name
+            # Create a unique model name and table name
             model_name = f"{self.name}{direction.capitalize()}Message_{service_instance.id}"
             table_name = f"{self.name}_{direction}_{service_instance.id}"
 
@@ -90,12 +92,24 @@ class Plugin(models.Model):
                 # Model not found, create it
                 pass
 
-            # Create the model without trying to create the table
-            logger.info(f"Creating model for existing table {table_name}")
-            return create_dynamic_model(model_name, schema, table_name, app_label='core')
+            # Create the model
+            logger.info(f"Creating model {model_name} for table {table_name}")
+            model = create_dynamic_model(model_name, schema, table_name, app_label='core')
+            
+            # Verify the table exists
+            with connection.cursor() as cursor:
+                cursor.execute(f'SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = \'{table_name}\')')
+                table_exists = cursor.fetchone()[0]
+                
+                if not table_exists:
+                    logger.warning(f"Table {table_name} does not exist, creating it")
+                    with connection.schema_editor() as schema_editor:
+                        schema_editor.create_model(model)
+
+            return model
 
         except Exception as e:
-            logger.error(f"Error creating message model for {self.name}: {e}")
+            logger.error(f"Error creating message model for {self.name}: {str(e)}")
             return None
 
 class PluginInstance(models.Model):
@@ -105,17 +119,6 @@ class PluginInstance(models.Model):
 
     def __str__(self):
         return f"{self.service_instance.name} ({self.app_config})"
-
-class Message(models.Model):
-    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
-    subject = models.CharField(max_length=255)
-    body = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    sent_at = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(max_length=50, default='queued')
-
-    def __str__(self):
-        return f"{self.subject} (status: {self.status})"
 
 class ServiceInstance(models.Model):
     name = models.CharField(max_length=255)
@@ -522,5 +525,5 @@ class SystemMessageTemplate(models.Model):
         """Replace placeholders in the message with actual values."""
         message = self.message
         for key, value in kwargs.items():
-            message = message.replace(f'{{{key}}}', str(value))
+            message = message.replace(f"{{{key}}}", str(value))
         return message

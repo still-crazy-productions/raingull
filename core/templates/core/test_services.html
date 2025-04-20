@@ -1,263 +1,329 @@
 {% extends "base.html" %}
+{% load static %}
+
+{% block title %}Test Services{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <h2 class="text-2xl font-bold text-gray-900 mb-6">Test Services</h2>
-    
-    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
-        <div class="px-4 py-5 sm:px-6 border-b border-gray-200">
-            <h3 class="text-lg leading-6 font-medium text-gray-900">Service Instances</h3>
-        </div>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">Test Services</h1>
+
+    <!-- Queue Messages Section -->
+    <div class="bg-white shadow rounded-lg mb-6">
         <div class="px-4 py-5 sm:p-6">
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Friendly Name</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Plugin</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming Enabled</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing Enabled</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        {% for instance in service_instances %}
-                        <tr>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ instance.friendly_name }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                {{ instance.plugin.name }}
-                                {% if instance._plugin_instance %}
-                                    <br><span class="text-gray-500 text-xs">Instance ID: {{ instance.plugin_instance.id }}</span>
-                                {% else %}
-                                    <br><span class="text-red-500 text-xs">No plugin instance loaded</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                {% if instance._plugin_instance %}
-                                    {{ instance.incoming_enabled|yesno:"Yes,No" }}
-                                    {% if instance._supports_incoming %}
-                                        <br><span class="text-green-500 text-xs">Plugin supports incoming</span>
-                                    {% else %}
-                                        <br><span class="text-gray-500 text-xs">Plugin does not support incoming</span>
-                                    {% endif %}
-                                {% else %}
-                                    <span class="text-gray-500">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                {% if instance._plugin_instance %}
-                                    {{ instance.outgoing_enabled|yesno:"Yes,No" }}
-                                    {% if instance._supports_outgoing %}
-                                        <br><span class="text-green-500 text-xs">Plugin supports outgoing</span>
-                                    {% else %}
-                                        <br><span class="text-gray-500 text-xs">Plugin does not support outgoing</span>
-                                    {% endif %}
-                                {% else %}
-                                    <span class="text-gray-500">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                {% if instance._plugin_instance %}
-                                    <div class="space-x-2">
-                                        {% if instance.plugin.name == 'imap_plugin' and instance.incoming_enabled and instance._supports_incoming %}
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 retrieve-messages" data-instance-id="{{ instance.id }}">
-                                            Retrieve Messages
-                                        </button>
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 translate-messages" data-instance-id="{{ instance.id }}">
-                                            Translate Messages
-                                        </button>
-                                        {% endif %}
-                                        {% if instance.plugin.name == 'smtp_plugin' and instance.outgoing_enabled and instance._supports_outgoing %}
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 test-connection" data-instance-id="{{ instance.id }}">
-                                            Test Connection
-                                        </button>
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 queue-messages" data-instance-id="{{ instance.id }}">
-                                            Queue Messages
-                                        </button>
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 send-messages" data-instance-id="{{ instance.id }}">
-                                            Send Messages
-                                        </button>
-                                        {% endif %}
-                                        {% if instance.plugin.name == 'twilio_sms' and instance.outgoing_enabled and instance._supports_outgoing %}
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 test-connection" data-instance-id="{{ instance.id }}">
-                                            Test Connection
-                                        </button>
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 queue-messages" data-instance-id="{{ instance.id }}">
-                                            Queue Messages
-                                        </button>
-                                        <button class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 send-messages" data-instance-id="{{ instance.id }}">
-                                            Send Messages
-                                        </button>
-                                        {% endif %}
-                                    </div>
-                                {% else %}
-                                    <span class="text-gray-500">No actions available</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Queue Messages</h2>
+            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 send-queued-messages">
+                Send Queued Messages
+            </button>
+            <div class="mt-2 result-container" id="result-queue"></div>
         </div>
     </div>
-</div>
 
-<!-- Loading Modal -->
-<div class="fixed z-10 inset-0 overflow-y-auto hidden" id="loadingModal" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-    <div class="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-            <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0">
-                        <svg class="animate-spin h-6 w-6 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
+    <!-- Service Instances Section -->
+    <div class="bg-white shadow rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Service Instances</h2>
+            {% for instance in service_instances %}
+                <div class="mb-6">
+                    <h3 class="text-md font-medium text-gray-900">{{ instance.name }}</h3>
+                    <p class="text-sm text-gray-500">{{ instance.plugin.friendly_name }}</p>
+
+                    {% if instance.plugin.name == 'imap' %}
+                        <div class="mt-4 space-x-2">
+                            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 retrieve-messages"
+                                    data-instance-id="{{ instance.id }}">
+                                Retrieve Messages
+                            </button>
+                            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 translate-messages"
+                                    data-instance-id="{{ instance.id }}">
+                                Translate Messages
+                            </button>
+                        </div>
+                        <div class="mt-2 result-container" id="result-{{ instance.id }}"></div>
+                    {% endif %}
+
+                    {% if instance.plugin.name == 'smtp' %}
+                        <div class="mt-4 space-x-2">
+                            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 send-messages"
+                                    data-instance-id="{{ instance.id }}">
+                                Send Messages
+                            </button>
+                            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 queue-messages"
+                                    data-instance-id="{{ instance.id }}">
+                                Queue Messages
+                            </button>
+                            <button class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 send-messages"
+                                    data-instance-id="{{ instance.id }}">
+                                Send Queued Messages
+                            </button>
+                        </div>
+                        <div class="mt-2 result-container" id="result-{{ instance.id }}"></div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Activate Service Section -->
+    <div class="bg-white shadow rounded-lg mt-6">
+        <div class="px-4 py-5 sm:p-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Activate Service</h2>
+            <form id="activateServiceForm" class="space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                    <div>
+                        <label for="userSelect" class="block text-sm font-medium text-gray-700">User</label>
+                        <select id="userSelect" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            <option value="">Select a user</option>
+                            {% for user in users %}
+                                <option value="{{ user.id }}">{{ user.username }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
-                    <div class="ml-4">
-                        <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">Processing</h3>
-                        <p class="text-sm text-gray-500" id="loadingMessage">Please wait...</p>
+
+                    <div>
+                        <label for="serviceSelect" class="block text-sm font-medium text-gray-700">Service</label>
+                        <select id="serviceSelect" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            <option value="">Select a service</option>
+                            {% for instance in service_instances %}
+                                <option value="{{ instance.id }}">{{ instance.name }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                 </div>
-            </div>
+
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Activate Service
+                </button>
+            </form>
         </div>
     </div>
 </div>
 
-{% endblock %}
-
-{% block extra_js %}
 <script>
+// Add the getCookie function
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    const loadingModal = document.getElementById('loadingModal');
-    const loadingMessage = document.getElementById('loadingMessage');
-
-    // Handle Retrieve Messages button click
+    // Handle IMAP Retrieve Messages button
     document.querySelectorAll('.retrieve-messages').forEach(button => {
-        button.addEventListener('click', async function() {
+        button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            // Show loading modal
-            loadingModal.classList.remove('hidden');
-            loadingMessage.textContent = 'Retrieving messages...';
-            
-            try {
-                const response = await fetch(`/core/test/imap/retrieve/${instanceId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    }
-                });
-                const data = await response.json();
-                loadingMessage.textContent = data.message;
-            } catch (error) {
-                loadingMessage.textContent = 'Error: ' + error.message;
-            } finally {
-                setTimeout(() => {
-                    loadingModal.classList.add('hidden');
-                }, 2000);
-            }
+            fetch(`/core/test/imap/retrieve/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateResultContainer(resultContainer, data);
+            })
+            .catch(error => {
+                showError(resultContainer, error);
+            });
         });
     });
 
-    // Handle Translate Messages button click
+    // Handle IMAP Translate Messages button
     document.querySelectorAll('.translate-messages').forEach(button => {
-        button.addEventListener('click', async function() {
+        button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
-            const originalText = this.textContent;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            this.disabled = true;
-            this.textContent = 'Translating...';
-            
-            try {
-                const response = await fetch(`/core/test/translate/${instanceId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    }
-                });
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert(`Successfully translated ${data.count} messages to Raingull standard format!`);
-                } else {
-                    alert('Error: ' + data.error);
+            fetch(`/core/test/translate/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 }
-            } catch (error) {
-                alert('Error: ' + error.message);
-            } finally {
-                this.disabled = false;
-                this.textContent = originalText;
-            }
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateResultContainer(resultContainer, data);
+            })
+            .catch(error => {
+                showError(resultContainer, error);
+            });
         });
     });
 
-    // Handle Test Connection button click
-    document.querySelectorAll('.test-connection').forEach(button => {
-        button.addEventListener('click', async function() {
+    // Handle SMTP Send Messages button
+    document.querySelectorAll('.send-messages').forEach(button => {
+        button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
-            const originalText = this.textContent;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            this.disabled = true;
-            this.textContent = 'Testing...';
-            
-            try {
-                const response = await fetch(`/core/test/plugin/connection/${instanceId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    }
-                });
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert(data.message);
-                } else {
-                    alert('Error: ' + data.message);
+            fetch(`/core/test/send/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 }
-            } catch (error) {
-                alert('Error: ' + error.message);
-            } finally {
-                this.disabled = false;
-                this.textContent = originalText;
-            }
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateResultContainer(resultContainer, data);
+            })
+            .catch(error => {
+                showError(resultContainer, error);
+            });
         });
     });
 
-    // Handle Queue Messages button click
+    // Handle Queue Messages button
     document.querySelectorAll('.queue-messages').forEach(button => {
-        button.addEventListener('click', async function() {
+        button.addEventListener('click', function() {
             const instanceId = this.dataset.instanceId;
-            const originalText = this.textContent;
+            const resultContainer = document.getElementById(`result-${instanceId}`);
             
-            this.disabled = true;
-            this.textContent = 'Queueing...';
-            
-            try {
-                const response = await fetch(`/core/test/queue/${instanceId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    }
-                });
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert(`Successfully queued ${data.count} messages!`);
-                } else {
-                    alert('Error: ' + data.error);
+            fetch(`/core/test/queue/${instanceId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
                 }
-            } catch (error) {
-                alert('Error: ' + error.message);
-            } finally {
-                this.disabled = false;
-                this.textContent = originalText;
-            }
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateResultContainer(resultContainer, data);
+            })
+            .catch(error => {
+                showError(resultContainer, error);
+            });
+        });
+    });
+
+    // Handle Send Queued Messages button
+    document.querySelectorAll('.send-queued-messages').forEach(button => {
+        button.addEventListener('click', function() {
+            const resultContainer = document.getElementById('result-queue');
+            
+            fetch('/core/test/send-queued/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateResultContainer(resultContainer, data);
+            })
+            .catch(error => {
+                showError(resultContainer, error);
+            });
         });
     });
 });
+
+// Service Activation Form Handler
+document.getElementById('activateServiceForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const userId = document.getElementById('userSelect').value;
+    const serviceId = document.getElementById('serviceSelect').value;
+    const config = {};
+    
+    // Collect all config field values
+    document.querySelectorAll('#configFields input, #configFields select').forEach(field => {
+        config[field.name] = field.value;
+    });
+    
+    fetch(`/core/test/activate-service/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken')
+        },
+        body: JSON.stringify({
+            user_id: userId,
+            service_instance_id: serviceId,
+            config: config
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        const resultDiv = document.getElementById('activationResult');
+        if (data.success) {
+            resultDiv.innerHTML = `<div class="rounded-md p-4 bg-green-50 text-green-800">${data.message}</div>`;
+        } else {
+            resultDiv.innerHTML = `<div class="rounded-md p-4 bg-red-50 text-red-800">${data.message}</div>`;
+        }
+    })
+    .catch(error => {
+        document.getElementById('activationResult').innerHTML = 
+            `<div class="rounded-md p-4 bg-red-50 text-red-800">Error: ${error.message}</div>`;
+    });
+});
+
+// Load config fields when service is selected
+document.getElementById('serviceSelect').addEventListener('change', function() {
+    const serviceId = this.value;
+    const configFieldsDiv = document.getElementById('configFields');
+    
+    if (!serviceId) {
+        configFieldsDiv.innerHTML = '';
+        return;
+    }
+    
+    // Fetch config fields for the selected service
+    fetch(`/core/test/service-config-fields/${serviceId}/`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let html = '';
+                data.fields.forEach(field => {
+                    html += createConfigField(field);
+                });
+                configFieldsDiv.innerHTML = html;
+            }
+        })
+        .catch(error => {
+            showConfigFieldsError(error);
+        });
+});
+
+function updateResultContainer(resultContainer, data) {
+    const alertClass = data.success ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800';
+    resultContainer.innerHTML = `<div class="rounded-md p-4 ${alertClass}">${data.message}</div>`;
+}
+
+function showError(resultContainer, error) {
+    resultContainer.innerHTML = `<div class="rounded-md p-4 bg-red-50 text-red-800">Error: ${error}</div>`;
+}
+
+function createConfigField(field) {
+    if (field.type === 'select') {
+        return `<select class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" 
+                name="${field.name}" 
+                id="config_${field.name}" 
+                ${field.required ? 'required' : ''}>
+            ${field.options.map(option => `<option value="${option.value}">${option.label}</option>`).join('')}
+        </select>`;
+    } else {
+        return `<input type="${field.type}" 
+                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                name="${field.name}" 
+                id="config_${field.name}" 
+                ${field.required ? 'required' : ''}>`;
+    }
+}
+
+function showConfigFieldsError(error) {
+    configFieldsDiv.innerHTML = `<div class="rounded-md p-4 bg-red-50 text-red-800">Error loading config fields: ${error.message}</div>`;
+}
 </script>
-{% endblock %} 
+{% endblock %}
