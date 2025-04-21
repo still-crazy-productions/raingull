@@ -172,3 +172,28 @@ git push origin main
         <small class="form-text text-muted">If checked, the user will receive a link to access the web interface. If unchecked, they will only be able to receive messages.</small>
     </div>
 </div>
+
+# Project Log
+
+## 2024-04-20
+
+### Model Refactoring
+- Renamed `ServiceInstance` model to `Service` for clarity
+- Updated all references in `views.py` to use the new name
+- Fixed import statements and model references throughout the codebase
+- Created migration to rename the `ServiceInstance` table to `core_services`
+- Added `app_config` field to the `Service` model
+
+### Service Testing
+- Successfully tested service creation and plugin activation
+- Verified dynamic table creation (smtp_1_out, imap_2_in)
+- Confirmed core_services table structure and data integrity
+
+### Known Issues
+- Test Connection buttons not working (JavaScript loading/timing issue)
+- IMAP/SMTP passwords stored as plain text in database (security concern)
+
+### Pending Tasks
+- Drop the `PluginInstance` table
+- Fix Test Connection button functionality
+- Implement secure password storage for service configurations

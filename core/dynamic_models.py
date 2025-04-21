@@ -26,7 +26,7 @@ def create_dynamic_model(model_name, fields, table_name, app_label='core'):
         if existing_model:
             # Verify the table exists
             with connection.cursor() as cursor:
-                cursor.execute(f'SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = \'{table_name}\')')
+                cursor.execute(f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)", [table_name])
                 table_exists = cursor.fetchone()[0]
                 
                 if not table_exists:
@@ -99,6 +99,9 @@ def create_dynamic_model(model_name, fields, table_name, app_label='core'):
         if "already registered" not in str(e):
             logger.error(f"Error registering model {model_name}: {str(e)}")
             raise
+        else:
+            # Model is already registered, which is fine in a multi-process environment
+            logger.debug(f"Model {model_name} was already registered, this is expected in multi-process environments")
     
     # Create the table if it doesn't exist
     try:

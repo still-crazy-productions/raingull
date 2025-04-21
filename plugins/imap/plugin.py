@@ -59,68 +59,30 @@ class Plugin:
         except Exception as e:
             return {"success": False, "message": str(e)}
 
-    def retrieve_messages(self):
-        """Retrieve messages from IMAP inbox and move them to processed folder"""
+    def retrieve_messages(self, service_instance):
+        """Retrieve messages from the IMAP inbox."""
+        print("Starting message retrieval process...")
+        self.service_instance = service_instance
+        config = service_instance.config
+        processed_message_ids = set()
+        processed_count = 0
+        stored_count = 0
+
         try:
-            # Get configuration
-            config = self.service_instance.config
-            if not config:
-                return {"success": False, "message": "No configuration found for this service instance"}
-
-            server = config.get('imap_server')
-            if not server:
-                return {"success": False, "message": "IMAP server address not configured"}
-
-            port = int(config.get('imap_port', 993))
-            user = config.get('username')
-            if not user:
-                return {"success": False, "message": "Username not configured"}
-
-            password = config.get('password')
-            if not password:
-                return {"success": False, "message": "Password not configured"}
-
-            encryption = config.get('encryption', 'SSL/TLS')
-            inbox_folder = config.get('imap_inbox_folder', 'INBOX')
-            processed_folder = config.get('imap_processed_folder', 'Processed')
-
-            print(f"Attempting to connect to IMAP server: {server}:{port} with encryption: {encryption}")
-
-            # Connect to IMAP server
-            try:
-                if encryption == "SSL/TLS":
-                    mail = imaplib.IMAP4_SSL(server, port)
-                else:
-                    mail = imaplib.IMAP4(server, port)
-                    if encryption == "STARTTLS":
-                        mail.starttls()
-            except ConnectionRefusedError as e:
-                return {"success": False, "message": f"Connection refused to {server}:{port}. Please check if the server is running and the port is correct."}
-            except Exception as e:
-                return {"success": False, "message": f"Failed to connect to IMAP server: {str(e)}"}
-
-            print("Connected to IMAP server, attempting login...")
-
+            # Connect to the IMAP server
+            print(f"Connecting to IMAP server: {config['host']}:{config['port']}")
+            mail = imaplib.IMAP4_SSL(config['host'], config['port'])
+            
             # Login
-            try:
-                mail.login(user, password)
-            except imaplib.IMAP4.error as e:
-                return {"success": False, "message": f"Login failed: {str(e)}"}
-
-            print("Login successful, selecting inbox folder...")
-
-            # Select inbox folder
-            try:
-                mail.select(inbox_folder)
-            except imaplib.IMAP4.error as e:
-                return {"success": False, "message": f"Failed to select folder '{inbox_folder}': {str(e)}"}
-
-            # Initialize counters
-            processed_count = 0
-            stored_count = 0
-            processed_message_ids = set()  # Keep track of processed message IDs
-
+            print(f"Logging in as: {config['username']}")
+            mail.login(config['username'], config['password'])
+            
+            # Select the inbox
+            print("Selecting inbox folder...")
+            mail.select('INBOX')
+            
             # Get all messages
+            print("Searching for messages...")
             _, message_numbers = mail.search(None, 'ALL')
             message_numbers = message_numbers[0].split()
             message_count = len(message_numbers)
@@ -138,18 +100,23 @@ class Plugin:
                     incoming_model = None
 
                 # Create processed folder if it doesn't exist
+                processed_folder = 'Processed'
                 try:
                     mail.create(processed_folder)
                     print(f"Created processed folder: {processed_folder}")
                 except:
-                    # Folder might already exist, which is fine
                     print(f"Processed folder {processed_folder} already exists")
 
                 # Process each message
                 for num in message_numbers:
                     try:
+                        print(f"Processing message {num.decode('utf-8')}")
                         # Fetch the message with all its parts
                         _, msg_data = mail.fetch(num, '(RFC822)')
+                        if not msg_data or not msg_data[0]:
+                            print(f"Warning: No data returned for message {num.decode('utf-8')}")
+                            continue
+                            
                         email_body = msg_data[0][1]
                         
                         # Parse the email
@@ -161,6 +128,9 @@ class Plugin:
                         
                         # Get the message ID from headers
                         message_id = msg.get('Message-ID', num.decode('utf-8'))
+                        if not message_id:
+                            message_id = num.decode('utf-8')
+                            print(f"Warning: No Message-ID found for message {num}, using sequence number")
                         
                         # Skip if we've already processed this message
                         if message_id in processed_message_ids:
@@ -197,49 +167,58 @@ class Plugin:
                                 message = incoming_model(
                                     raingull_id=uuid.uuid4(),  # Generate a new UUID for Raingull's tracking
                                     message_id=message_id,  # Keep the original IMAP message ID
-                                    imap_message_id=message_id,
-                                    subject=msg.get('subject', ''),
-                                    email_from=msg.get('from', ''),
-                                    to=msg.get_all('to', []),  # Get all recipients
-                                    date=msg.get('date', ''),
+                                    imap_message_id=num.decode('utf-8'),  # Store the IMAP message ID
+                                    subject=msg.get('Subject', ''),
+                                    sender_email=msg.get('From', ''),
+                                    recipients={'to': msg.get('To', ''), 'cc': msg.get('Cc', ''), 'bcc': msg.get('Bcc', '')},
+                                    date=msg.get('Date', ''),
                                     body=body,
                                     headers=dict(msg.items()),
-                                    status='new',
-                                    processed_at=timezone.now()
+                                    status='new'
                                 )
                                 message.save()
                                 stored_count += 1
                                 print(f"Stored message {message_id} in database")
                             except Exception as e:
-                                print(f"Error storing message {num} in database: {str(e)}")
+                                print(f"Error storing message {message_id} in database: {str(e)}")
                         
                         # Move the message to processed folder
-                        mail.copy(num, processed_folder)
-                        mail.store(num, '+FLAGS', '\\Deleted')
-                        processed_count += 1
-                        
+                        try:
+                            mail.copy(num, processed_folder)
+                            mail.store(num, '+FLAGS', '\\Deleted')
+                            processed_count += 1
+                            print(f"Moved message {message_id} to processed folder")
+                        except Exception as e:
+                            print(f"Error moving message {message_id} to processed folder: {str(e)}")
+                            
                     except Exception as e:
-                        print(f"Error processing message {num}: {str(e)}")
+                        print(f"Error processing message {num.decode('utf-8')}: {str(e)}")
                         continue
-
+                
                 # Expunge deleted messages
                 mail.expunge()
-                print(f"Processed {processed_count} messages, stored {stored_count} in database")
-
-            # Close the mailbox and logout
-            mail.close()
-            mail.logout()
-            print("Connection closed")
-
-            return {
-                "success": True,
-                "message": f"Retrieved {message_count} messages, processed {processed_count} messages (stored {stored_count} in database) and moved them to the processed folder"
-            }
-
-        except imaplib.IMAP4.error as e:
-            return {"success": False, "message": f"IMAP error: {str(e)}"}
+                
+                return {
+                    "success": True,
+                    "message": f"Processed {processed_count} messages, stored {stored_count} in database"
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": "No new messages found"
+                }
+                
         except Exception as e:
-            return {"success": False, "message": str(e)}
+            print(f"Error in retrieve_messages: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error retrieving messages: {str(e)}"
+            }
+        finally:
+            try:
+                mail.logout()
+            except:
+                pass
 
     def connect(self):
         """Connect to the IMAP server"""
@@ -274,7 +253,7 @@ class Plugin:
                 message_id=message_data['message_id'],  # Use message_id instead of imap_message_id
                 imap_message_id=message_data['imap_message_id'],
                 subject=message_data['subject'],
-                email_from=message_data['email_from'],
+                sender_email=message_data['email_from'],
                 to=message_data['to'],
                 date=message_data['date'],
                 body=message_data['body'],

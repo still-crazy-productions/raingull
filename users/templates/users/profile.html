@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div class="max-w-3xl mx-auto">
+        <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+            <div class="px-4 py-5 sm:px-6">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">
+                    Profile Information
+                </h3>
+                <p class="mt-1 max-w-2xl text-sm text-gray-500">
+                    Your personal details and account information.
+                </p>
+            </div>
+            <div class="border-t border-gray-200 px-4 py-5 sm:px-6">
+                <dl class="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2">
+                    <div class="sm:col-span-1">
+                        <dt class="text-sm font-medium text-gray-500">
+                            Username
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ user.username }}
+                        </dd>
+                    </div>
+                    <div class="sm:col-span-1">
+                        <dt class="text-sm font-medium text-gray-500">
+                            Email
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ user.email }}
+                        </dd>
+                    </div>
+                    <div class="sm:col-span-1">
+                        <dt class="text-sm font-medium text-gray-500">
+                            First Name
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ user.first_name }}
+                        </dd>
+                    </div>
+                    <div class="sm:col-span-1">
+                        <dt class="text-sm font-medium text-gray-500">
+                            Last Name
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ user.last_name }}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+            <div class="px-4 py-5 sm:px-6">
+                <div class="flex justify-end">
+                    <a href="{% url 'profile_update' %}" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Edit Profile
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

@@ -22,8 +22,8 @@
       "message_id": {"type": "CharField", "max_length": 255, "required": true, "unique": true},
       "imap_message_id": {"type": "CharField", "max_length": 255, "required": true},
       "subject": {"type": "CharField", "max_length": 255, "required": true},
-      "email_from": {"type": "CharField", "max_length": 255, "required": true},
-      "to": {"type": "JSONField", "required": true},
+      "sender_email": {"type": "CharField", "max_length": 255, "required": true},
+      "recipients": {"type": "JSONField", "required": true},
       "date": {"type": "CharField", "max_length": 255, "required": true},
       "body": {"type": "TextField", "required": true},
       "headers": {"type": "JSONField", "required": false},
@@ -32,8 +32,8 @@
     }
   },
   "translation_rules": {
-    "sender": "email_from",
-    "recipient": "to",
+    "sender": "sender_email",
+    "recipient": "recipients",
     "subject": "subject",
     "body": "body"
   }

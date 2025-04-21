@@ -1,6 +1,6 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import ServiceInstance, RaingullStandardMessage, AuditLog, OutgoingMessageQueue, UserServiceActivation
+from .models import Service, Message, AuditLog, MessageQueue, UserService
 from django.core.mail import send_mail
 from django.conf import settings
 from core.utils import get_imap_connection, get_smtp_connection
@@ -34,66 +34,88 @@ def poll_imap_services():
     """Poll all active IMAP services for new messages."""
     try:
         # Get all active IMAP service instances
-        imap_services = ServiceInstance.objects.filter(
+        imap_services = Service.objects.filter(
             plugin__name='imap',
             incoming_enabled=True
         )
         
         for service in imap_services:
+            lock = None
             try:
                 # Create a unique lock key for this service
                 lock_key = f"poll_imap:{service.id}"
                 
+                # Check for stale lock
+                lock_exists = redis_client.exists(lock_key)
+                if lock_exists:
+                    lock_owner = redis_client.get(f"{lock_key}:owner")
+                    if not lock_owner:
+                        logger.warning(f"Found stale lock for {service.name}, cleaning up")
+                        try:
+                            redis_client.delete(lock_key)
+                            redis_client.delete(f"{lock_key}:owner")
+                        except Exception as e:
+                            logger.error(f"Error cleaning up stale lock for {service.name}: {e}")
+                
                 # Try to acquire a lock for this service
-                lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
-                if lock.acquire():
-                    try:
-                        # Log start of polling
-                        log_audit(
-                            'imap_poll',
-                            f"Step 1: Starting IMAP poll for {service.name}",
-                            service
-                        )
-                        
-                        # Get the plugin instance
-                        plugin = service.get_plugin_instance()
-                        if not plugin:
-                            error_msg = f"Step 1: Could not get plugin instance for {service.name}"
-                            logger.error(error_msg)
-                            log_audit('error', error_msg, service)
-                            continue
-                        
-                        # Poll for new messages
-                        result = plugin.retrieve_messages()
-                        if not result.get('success'):
-                            error_msg = f"Step 1: Error retrieving messages: {result.get('message')}"
-                            logger.error(error_msg)
-                            log_audit('error', error_msg, service)
-                            continue
-                        
-                        # Log polling results
-                        log_audit(
-                            'imap_poll',
-                            f"Step 1: {result.get('message', 'Messages retrieved successfully')}",
-                            service
-                        )
-                        
-                    except Exception as e:
-                        error_msg = f"Step 1: Error polling IMAP service {service.name}: {e}"
-                        logger.error(error_msg)
-                        log_audit('error', error_msg, service)
-                        continue
-                    finally:
-                        lock.release()
-                else:
-                    logger.warning(f"Could not acquire lock for IMAP service {service.name}, skipping")
+                lock = Lock(redis_client, lock_key, timeout=300, blocking_timeout=5)
+                if not lock.acquire():
+                    # Check if the lock is actually held by another process
+                    lock_owner = redis_client.get(f"{lock_key}:owner")
+                    if lock_owner:
+                        logger.warning(f"Lock for IMAP service {service.name} is held by process {lock_owner.decode()}")
+                    else:
+                        logger.warning(f"Could not acquire lock for IMAP service {service.name}, but no owner found")
                     continue
                 
+                # Log start of polling
+                log_audit(
+                    'imap_poll',
+                    f"Step 1: Starting IMAP poll for {service.name}",
+                    service
+                )
+                
+                # Get the plugin instance
+                plugin = service.get_plugin_instance()
+                if not plugin:
+                    error_msg = f"Step 1: Could not get plugin instance for {service.name}"
+                    logger.error(error_msg)
+                    log_audit('error', error_msg, service)
+                    continue
+                
+                # Poll for new messages
+                result = plugin.retrieve_messages(service)
+                if not result.get('success'):
+                    error_msg = f"Step 1: Error retrieving messages: {result.get('message')}"
+                    logger.error(error_msg)
+                    log_audit('error', error_msg, service)
+                    continue
+                
+                # Log polling results
+                log_audit(
+                    'imap_poll',
+                    f"Step 1: {result.get('message', 'Messages retrieved successfully')}",
+                    service
+                )
+                
             except Exception as e:
-                error_msg = f"Step 1: Error processing IMAP service {service.name}: {str(e)}"
+                error_msg = f"Step 1: Error polling IMAP service {service.name}: {e}"
                 logger.error(error_msg)
                 log_audit('error', error_msg, service)
                 continue
+            finally:
+                # Always try to release the lock if we acquired it
+                if lock and lock.locked():
+                    try:
+                        lock.release()
+                    except Exception as e:
+                        logger.error(f"Error releasing lock for {service.name}: {e}")
+                        # Try to force release the lock
+                        try:
+                            redis_client.delete(lock_key)
+                            redis_client.delete(f"{lock_key}:owner")
+                        except Exception as e:
+                            logger.error(f"Error force releasing lock for {service.name}: {e}")
                 
     except Exception as e:
         error_msg = f"Step 1: Error in poll_imap_services task: {str(e)}"
@@ -106,7 +128,7 @@ def process_outgoing_messages():
     """Process outgoing messages from the queue."""
     try:
         # Get all queued messages
-        queued_messages = OutgoingMessageQueue.objects.filter(
+        queued_messages = MessageQueue.objects.filter(
             status='queued'
         ).select_related(
             'raingull_message',
@@ -145,17 +167,17 @@ def process_outgoing_messages():
                     
                     # Get the user's service activation
                     try:
-                        user_activation = UserServiceActivation.objects.get(
+                        user_activation = UserService.objects.get(
                             user=message.user,
                             service_instance=message.service_instance,
                             is_active=True
                         )
-                    except UserServiceActivation.DoesNotExist:
+                    except UserService.DoesNotExist:
                         # If this is an invitation message, we can proceed without an active activation
                         if is_invitation:
                             # Try to get the existing activation (even if disabled)
                             try:
-                                user_activation = UserServiceActivation.objects.get(
+                                user_activation = UserService.objects.get(
                                     user=message.user,
                                     service_instance=message.service_instance
                                 )
@@ -164,9 +186,9 @@ def process_outgoing_messages():
                                 if not user_activation.config.get('email_address'):
                                     user_activation.config['email_address'] = message.raingull_message.headers.get('recipient_email')
                                 user_activation.save()
-                            except UserServiceActivation.DoesNotExist:
+                            except UserService.DoesNotExist:
                                 # Create a new activation if none exists
-                                user_activation = UserServiceActivation.objects.create(
+                                user_activation = UserService.objects.create(
                                     user=message.user,
                                     service_instance=message.service_instance,
                                     is_active=True,
@@ -266,7 +288,7 @@ def process_incoming_messages():
     """
     try:
         # Get all service instances with incoming enabled
-        service_instances = ServiceInstance.objects.filter(
+        service_instances = Service.objects.filter(
             incoming_enabled=True
         )
         
@@ -309,7 +331,7 @@ def process_incoming_messages():
                     try:
                         if lock.acquire():
                             # Check if message was already processed
-                            if RaingullStandardMessage.objects.filter(raingull_id=message.raingull_id).exists():
+                            if Message.objects.filter(raingull_id=message.raingull_id).exists():
                                 # Mark the original message as processed
                                 message.status = 'processed'
                                 message.processed_at = timezone.now()
@@ -317,7 +339,7 @@ def process_incoming_messages():
                                 continue
                             
                             # Create a new Raingull standard message
-                            standard_message = RaingullStandardMessage.create_standard_message(
+                            standard_message = Message.create_standard_message(
                                 raingull_id=message.raingull_id,
                                 source_service=instance,
                                 source_message_id=message.imap_message_id,
@@ -375,7 +397,7 @@ def distribute_outgoing_messages():
     """Distribute outgoing messages to active users."""
     try:
         # Get all active users with active service activations
-        active_users = UserServiceActivation.objects.filter(
+        active_users = UserService.objects.filter(
             is_active=True,
             user__is_active=True  # Only distribute to active users
         ).select_related('user', 'service_instance')
@@ -391,7 +413,7 @@ def distribute_outgoing_messages():
         for service_instance, activations in service_groups.items():
             try:
                 # Get unprocessed messages for this service
-                messages = RaingullStandardMessage.objects.filter(
+                messages = Message.objects.filter(
                     source_service=service_instance,
                     processed=False
                 )
@@ -403,7 +425,7 @@ def distribute_outgoing_messages():
                         
                     # Queue message for each active user
                     for activation in activations:
-                        OutgoingMessageQueue.objects.create(
+                        MessageQueue.objects.create(
                             raingull_message=message,
                             user=activation.user,
                             service_instance=service_instance,

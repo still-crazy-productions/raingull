@@ -2,7 +2,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
-from core.models import ServiceInstance, Plugin, RaingullStandardMessage, UserServiceActivation, RaingullUser, OutgoingMessageQueue, AuditLog, ServiceMessageTemplate
+from core.models import Service, Plugin, Message, UserService, MessageQueue, AuditLog, ServiceMessageTemplate, User
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.module_loading import import_string
@@ -13,7 +13,6 @@ from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from django.utils import timezone
 import logging
-from django.contrib.auth.models import User
 from django.db.models import Count
 import pytz
 from django.conf import settings
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def service_instance_list(request):
-    instances = ServiceInstance.objects.select_related('plugin').all()
+    instances = Service.objects.select_related('plugin').all()
     plugins = Plugin.objects.filter(enabled=True)
     
     # Set plugin capabilities for each instance
@@ -128,7 +127,7 @@ def create_service_instance(request):
     if request.method == 'POST':
         try:
             # Create new service instance
-            instance = ServiceInstance(
+            instance = Service(
                 plugin=plugin,
                 name=request.POST.get('name'),
                 incoming_enabled=manifest.get('incoming', False),
@@ -168,7 +167,7 @@ def create_service_instance(request):
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def manage_service_instance(request, instance_id=None):
-    instance = get_object_or_404(ServiceInstance, pk=instance_id) if instance_id else None
+    instance = get_object_or_404(Service, pk=instance_id) if instance_id else None
     
     # Get the plugin manifest to check capabilities
     manifest = instance.plugin.get_manifest() if instance else None
@@ -308,7 +307,7 @@ def test_plugin_connection(request, plugin_name):
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def delete_service_instance(request, instance_id):
-    instance = get_object_or_404(ServiceInstance, pk=instance_id)
+    instance = get_object_or_404(Service, pk=instance_id)
     if request.method == 'POST':
         instance_name = instance.name
         instance.delete()
@@ -318,61 +317,21 @@ def delete_service_instance(request, instance_id):
 
 @login_required
 def test_services(request):
-    """
-    Test page for manually running service operations
-    """
-    # Get all service instances with their plugin instances
-    service_instances = ServiceInstance.objects.select_related('plugin', 'plugin_instance').all()
-    
-    # Debug logging
-    logger.debug(f"Found {len(service_instances)} service instances")
-    for instance in service_instances:
-        logger.debug(f"Instance: {instance.name}, Plugin: {instance.plugin.name}")
-        try:
-            # Get the manifest first
-            manifest = instance.plugin.get_manifest()
-            if manifest:
-                instance.plugin.manifest = manifest
-                logger.debug(f"Manifest loaded: {manifest}")
-                
-                # Update instance capabilities based on manifest
-                instance._supports_incoming = manifest.get('incoming', False)
-                instance._supports_outgoing = manifest.get('outgoing', False)
-            else:
-                logger.error(f"Failed to load manifest for {instance.name}")
-                instance._supports_incoming = False
-                instance._supports_outgoing = False
-            
-            # Get the plugin instance
-            plugin_instance = instance.get_plugin_instance()
-            if plugin_instance:
-                # Store the plugin instance in a temporary attribute
-                instance._plugin_instance = plugin_instance
-                logger.debug(f"Plugin instance loaded: {plugin_instance}")
-            else:
-                logger.error(f"Failed to load plugin instance for {instance.name}")
-            
-        except Exception as e:
-            logger.error(f"Error loading plugin instance or manifest for {instance.name}: {e}")
-            instance._supports_incoming = False
-            instance._supports_outgoing = False
-    
     # Get all users for the activation form
-    users = RaingullUser.objects.all()
+    users = User.objects.all()
     
     return render(request, 'core/test_services.html', {
-        'service_instances': service_instances,
         'users': users
     })
 
 @login_required
 def test_imap_retrieve(request, instance_id):
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         plugin = service_instance.get_plugin_instance()
         result = plugin.retrieve_messages()
         return JsonResponse(result)
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({"success": False, "message": "Service instance not found"})
     except Exception as e:
         return JsonResponse({"success": False, "message": str(e)})
@@ -380,7 +339,7 @@ def test_imap_retrieve(request, instance_id):
 @login_required
 def test_translate_messages(request, instance_id):
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         plugin = service_instance.get_plugin_instance()
         
         # Get the incoming message model
@@ -420,7 +379,7 @@ def test_translate_messages(request, instance_id):
                 print(f"Parsed date: {received_at}")
                 
                 # Create a new Raingull standard message
-                standard_message = RaingullStandardMessage.create_standard_message(
+                standard_message = Message.create_standard_message(
                     raingull_id=message.raingull_id,  # Copy the raingull_id from the source message
                     source_service=service_instance,
                     source_message_id=message.imap_message_id,
@@ -453,7 +412,7 @@ def test_translate_messages(request, instance_id):
             "message": f"Found {message_count} messages, translated {translated_count} to Raingull standard format"
         })
         
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({"success": False, "message": "Service instance not found"})
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
@@ -466,7 +425,7 @@ def test_translate_messages(request, instance_id):
 def test_smtp_send(request, instance_id):
     """Test sending messages via SMTP service instance."""
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         if service_instance.plugin.name != 'smtp_plugin':
             return JsonResponse({
                 'success': False,
@@ -482,7 +441,7 @@ def test_smtp_send(request, instance_id):
             })
 
         # Get messages that have been processed by IMAP but not by SMTP
-        unprocessed_messages = RaingullStandardMessage.objects.filter(
+        unprocessed_messages = Message.objects.filter(
             source_service__isnull=False,  # Has been processed by some service
             source_service__plugin__name='imap'  # Specifically by IMAP
         ).exclude(
@@ -536,7 +495,7 @@ def test_smtp_send(request, instance_id):
             'message': f'Successfully processed {processed_count} messages'
         })
 
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
@@ -552,7 +511,7 @@ def test_smtp_send(request, instance_id):
 def test_smtp_translate(request, instance_id):
     """Test translating messages to SMTP format."""
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         if service_instance.plugin.name != 'smtp_plugin':
             return JsonResponse({
                 'success': False,
@@ -568,7 +527,7 @@ def test_smtp_translate(request, instance_id):
             })
 
         # Get unprocessed messages from Raingull Standard table
-        unprocessed_messages = RaingullStandardMessage.objects.filter(
+        unprocessed_messages = Message.objects.filter(
             processed=False
         )
 
@@ -595,7 +554,7 @@ def test_smtp_translate(request, instance_id):
             'message': f'Successfully translated {translated_count} messages to SMTP format'
         })
 
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
@@ -612,7 +571,7 @@ def get_service_config_fields(request, instance_id):
     """Get configuration fields for a service instance."""
     try:
         print(f"Getting config fields for instance {instance_id}")
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         print(f"Found service instance: {service_instance.name}")
         
         manifest = service_instance.plugin.get_manifest()
@@ -625,7 +584,7 @@ def get_service_config_fields(request, instance_id):
             'success': True,
             'fields': config_fields
         })
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         print(f"Service instance {instance_id} not found")
         return JsonResponse({
             'success': False,
@@ -661,10 +620,10 @@ def activate_service(request):
             })
         
         # Get the service instance
-        service_instance = ServiceInstance.objects.get(id=service_instance_id)
+        service_instance = Service.objects.get(id=service_instance_id)
         
         # Get or create the activation
-        activation, created = UserServiceActivation.objects.get_or_create(
+        activation, created = UserService.objects.get_or_create(
             user_id=user_id,
             service_instance_id=service_instance_id,
             defaults={
@@ -683,7 +642,7 @@ def activate_service(request):
             'message': f'Service {"activated" if created else "updated"} successfully'
         })
         
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
@@ -704,7 +663,7 @@ def activate_service(request):
 def queue_outgoing_messages(request, instance_id):
     """Queue outgoing messages for all active users of a service instance."""
     try:
-        service_instance = ServiceInstance.objects.get(id=instance_id)
+        service_instance = Service.objects.get(id=instance_id)
         if not service_instance.outgoing_enabled:
             return JsonResponse({
                 'success': False,
@@ -731,7 +690,7 @@ def queue_outgoing_messages(request, instance_id):
         messages = outgoing_model.objects.filter(status='queued')
 
         # Get all active users for this service
-        active_users = UserServiceActivation.objects.filter(
+        active_users = UserService.objects.filter(
             service_instance=service_instance,
             is_active=True
         ).select_related('user')
@@ -749,12 +708,12 @@ def queue_outgoing_messages(request, instance_id):
             for activation in active_users:
                 try:
                     # Find the original Raingull standard message
-                    raingull_message = RaingullStandardMessage.objects.get(
+                    raingull_message = Message.objects.get(
                         raingull_id=message.raingull_id
                     )
                     
                     # Create queue entry
-                    OutgoingMessageQueue.objects.create(
+                    MessageQueue.objects.create(
                         raingull_message=raingull_message,
                         user=activation.user,
                         service_instance=service_instance,
@@ -762,7 +721,7 @@ def queue_outgoing_messages(request, instance_id):
                         status='queued'
                     )
                     queued_count += 1
-                except RaingullStandardMessage.DoesNotExist:
+                except Message.DoesNotExist:
                     logger.error(f"Could not find Raingull standard message for {message.raingull_id}")
                     continue
                 except Exception as e:
@@ -774,7 +733,7 @@ def queue_outgoing_messages(request, instance_id):
             'message': f'Successfully queued {queued_count} messages for {active_users.count()} users'
         })
 
-    except ServiceInstance.DoesNotExist:
+    except Service.DoesNotExist:
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
@@ -791,7 +750,7 @@ def send_queued_messages(request):
     """Send messages from the OutgoingMessageQueue."""
     try:
         # Get all queued messages
-        queued_messages = OutgoingMessageQueue.objects.filter(
+        queued_messages = MessageQueue.objects.filter(
             status='queued'
         ).select_related(
             'raingull_message',
@@ -822,12 +781,12 @@ def send_queued_messages(request):
                 
                 # Get the user's service activation to get the correct email address
                 try:
-                    user_activation = UserServiceActivation.objects.get(
+                    user_activation = UserService.objects.get(
                         user=message.user,
                         service_instance=message.service_instance,
                         is_active=True
                     )
-                except UserServiceActivation.DoesNotExist:
+                except UserService.DoesNotExist:
                     error_msg = f"User {message.user.username} is not activated for service {message.service_instance.name}"
                     logger.error(error_msg)
                     message.status = 'failed'
@@ -935,13 +894,10 @@ def audit_log(request):
 def user_profile(request, user_id=None):
     # If user_id is provided, get that user's profile
     # Otherwise, use the current user's profile
-    if user_id:
-        if not request.user.is_superuser:
-            messages.error(request, "You don't have permission to view other users' profiles.")
-            return redirect('core:my_profile')
-        profile_user = get_object_or_404(RaingullUser, id=user_id)
-    else:
-        profile_user = request.user
+    if user_id and not request.user.is_superuser:
+        messages.error(request, "You don't have permission to view other users' profiles.")
+        return redirect('core:my_profile')
+    profile_user = get_object_or_404(User, id=user_id) if user_id else request.user
 
     if request.method == 'POST':
         # Only allow updating your own profile
@@ -1067,7 +1023,7 @@ def plugin_manager(request):
 @user_passes_test(lambda u: u.is_superuser)
 def user_list(request):
     """List all users in the system. Requires superuser permissions."""
-    users = RaingullUser.objects.all().order_by('username')
+    users = User.objects.all().order_by('username')
     return render(request, 'core/user_list.html', {
         'users': users
     })
@@ -1076,9 +1032,12 @@ def user_list(request):
 def invite_user(request):
     if request.method == 'POST':
         try:
+            logger.debug("Starting user invitation process")
             # Get the service instance
             service_instance_id = request.POST.get('service_instance')
-            service_instance = ServiceInstance.objects.get(id=service_instance_id)
+            logger.debug(f"Service instance ID: {service_instance_id}")
+            service_instance = Service.objects.get(id=service_instance_id)
+            logger.debug(f"Found service instance: {service_instance.name}")
             
             # Get user details from the form
             first_name = request.POST.get('first_name')
@@ -1088,29 +1047,40 @@ def invite_user(request):
             is_superuser = request.POST.get('is_superuser') == 'on'
             is_staff = request.POST.get('is_staff') == 'on'
             
+            logger.debug(f"Form data - First Name: {first_name}, Last Name: {last_name}, Email: {email_address}")
+            
             if not email_address:
                 raise ValueError("Email address is required")
             
-            # Create a new user using RaingullUser with blank username and email
-            user = RaingullUser.objects.create_user(
-                username='',  # Leave blank
+            # Generate a random username for all users
+            username = f"user_{uuid.uuid4().hex[:10]}"
+            
+            # Create a new user
+            logger.debug("Creating new user")
+            user = User.objects.create_user(
+                username=username,
                 email='',     # Leave blank
                 first_name=first_name,
                 last_name=last_name,
                 is_active=enable_web_login,
                 is_superuser=is_superuser,
-                is_staff=is_staff
+                is_staff=is_staff,
+                web_login_enabled=enable_web_login
             )
+            logger.debug(f"Created user with ID: {user.id}")
             
-            # Create a disabled UserServiceActivation
-            activation = UserServiceActivation.objects.create(
+            # Create a UserService connection
+            logger.debug("Creating UserService connection")
+            user_service = UserService.objects.create(
                 user=user,
                 service_instance=service_instance,
                 is_active=False,
-                config={'email_address': email_address}
+                config=json.dumps({'email_address': email_address})  # Store as JSON string
             )
+            logger.debug(f"Created UserService with ID: {user_service.id}")
             
             # Generate activation tokens
+            logger.debug("Generating activation tokens")
             activation_token = default_token_generator.make_token(user)
             activation_link = request.build_absolute_uri(
                 reverse('core:activate_user', kwargs={
@@ -1120,6 +1090,7 @@ def invite_user(request):
             )
             
             # Create a service message for the invitation
+            logger.debug("Creating service message template")
             ServiceMessageTemplate.objects.create(
                 message_type='invitation',
                 recipient_email=email_address,
@@ -1129,15 +1100,17 @@ def invite_user(request):
                 status='queued'
             )
             
+            logger.debug("Invitation process completed successfully")
             messages.success(request, 'Invitation sent successfully.')
             return redirect('core:user_list')
             
         except Exception as e:
+            logger.error(f"Error in invite_user: {str(e)}", exc_info=True)
             messages.error(request, f'Error sending invitation: {str(e)}')
             return redirect('core:invite_user')
     
     # GET request - show the form
-    service_instances = ServiceInstance.objects.filter(outgoing_enabled=True)
+    service_instances = Service.objects.filter(outgoing_enabled=True)
     valid_instances = []
     
     for instance in service_instances:
@@ -1150,18 +1123,14 @@ def invite_user(request):
     })
 
 def activate_user(request, token):
-    """View for activating a user account."""
     try:
-        # Split the token into uid and token parts
-        uid, token = token.split('-', 1)
-        
         # Decode the user ID
-        user_id = force_str(urlsafe_base64_decode(uid))
-        user = RaingullUser.objects.get(pk=user_id)
+        user_id = force_str(urlsafe_base64_decode(token))
+        user = User.objects.get(pk=user_id)
         
         if default_token_generator.check_token(user, token):
             # Find and enable the service activation
-            service_activation = UserServiceActivation.objects.filter(
+            service_activation = UserService.objects.filter(
                 user=user,
                 is_active=False
             ).first()
@@ -1169,40 +1138,36 @@ def activate_user(request, token):
             if service_activation:
                 service_activation.is_active = True
                 service_activation.save()
-                messages.success(request, "Your service has been activated. You can now receive messages.")
+                messages.success(request, "Your account has been activated successfully.")
             else:
-                messages.error(request, "No pending service activation found.")
+                messages.error(request, "No pending activation found.")
             
             return redirect('login')
         else:
             messages.error(request, "Invalid activation link.")
             return redirect('login')
-    except (TypeError, ValueError, OverflowError, RaingullUser.DoesNotExist):
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
         messages.error(request, "Invalid activation link.")
         return redirect('login')
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 def delete_user(request, user_id):
-    """Delete a user and their associated service activations."""
     if request.method == 'POST':
         try:
-            user = get_object_or_404(RaingullUser, id=user_id)
+            user = get_object_or_404(User, id=user_id)
             
             # Prevent deleting yourself
             if user == request.user:
                 messages.error(request, "You cannot delete your own account.")
                 return redirect('core:user_list')
             
-            # Delete the user (this will cascade to UserServiceActivation due to the ForeignKey)
             user.delete()
-            messages.success(request, f"User {user.username} has been deleted successfully.")
+            messages.success(request, f"User {user.username} has been deleted.")
+            return redirect('core:user_list')
         except Exception as e:
             messages.error(request, f"Error deleting user: {str(e)}")
-        
-        return redirect('core:user_list')
-    
-    # If not POST, redirect to user list
+            return redirect('core:user_list')
     return redirect('core:user_list')
 
 @shared_task

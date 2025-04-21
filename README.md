@@ -9,6 +9,24 @@
 
 > **Important**: All commands in this project should use Linux CLI/bash/zsh syntax. Do NOT use PowerShell commands.
 
+## Known Issues
+
+### Security Concerns
+- **Password Storage**: IMAP and SMTP passwords are currently stored as plain text in the database. This is a significant security risk and should be addressed in future updates.
+  - Consider implementing encryption for sensitive configuration data
+  - Explore using Django's built-in encryption utilities
+  - Implement secure key management for encrypted data
+
+### Functionality Issues
+- **Test Connection Buttons**: The test connection functionality in the service management interface is currently not working due to JavaScript loading/timing issues.
+  - Issue appears to be related to DOM loading and event binding
+  - May require restructuring of template loading or JavaScript execution timing
+
+## Project Status
+- Core service functionality is operational
+- Dynamic table creation working correctly
+- Plugin activation and service creation working as expected
+
 ## Project Overview
 Raingull is a Django-based message processing and routing system with a plugin architecture for different services.
 
