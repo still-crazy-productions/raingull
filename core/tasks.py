@@ -18,61 +18,84 @@ from email.utils import parsedate_to_datetime
 from redis import Redis
 from redis.lock import Lock
 import uuid
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 redis_client = Redis(host='localhost', port=6379, db=0)
 
 def log_audit(event_type, details, service_instance=None):
     """Helper function to create audit log entries"""
-    AuditLog.objects.create(
-        event_type=event_type,
-        service_instance=service_instance,
-        details=details
-    )
+    try:
+        AuditLog.objects.create(
+            event_type=event_type,
+            details=details,
+            service_instance=service_instance,
+            timestamp=timezone.now()
+        )
+    except Exception as e:
+        logger.error(f"Error creating audit log entry: {str(e)}")
 
 @shared_task
-def poll_imap_services():
-    """Poll all active IMAP services for new messages."""
+def poll_incoming_services():
+    """Poll all active incoming services for new messages."""
     try:
-        # Get all active IMAP service instances
-        imap_services = Service.objects.filter(
-            plugin__name='imap',
+        # Get all active service instances with incoming enabled
+        incoming_services = Service.objects.filter(
             incoming_enabled=True
         )
         
-        for service in imap_services:
+        total_services = incoming_services.count()
+        if total_services == 0:
+            log_audit(
+                'incoming_poll',
+                "Step 1: No active incoming services configured",
+                None
+            )
+            return None
+            
+        # Log start of polling cycle
+        log_audit(
+            'incoming_poll',
+            f"Step 1: Starting polling cycle for {total_services} incoming service{'s' if total_services > 1 else ''}",
+            None
+        )
+        
+        for service in incoming_services:
             lock = None
             try:
                 # Create a unique lock key for this service
-                lock_key = f"poll_imap:{service.id}"
+                lock_key = f"poll_incoming:{service.id}"
                 
                 # Check for stale lock
                 lock_exists = redis_client.exists(lock_key)
                 if lock_exists:
                     lock_owner = redis_client.get(f"{lock_key}:owner")
                     if not lock_owner:
-                        logger.warning(f"Found stale lock for {service.name}, cleaning up")
+                        logger.warning(f"Step 1: Found stale lock for {service.name}, cleaning up")
                         try:
                             redis_client.delete(lock_key)
                             redis_client.delete(f"{lock_key}:owner")
                         except Exception as e:
-                            logger.error(f"Error cleaning up stale lock for {service.name}: {e}")
+                            logger.error(f"Step 1: Error cleaning up stale lock for {service.name}: {e}")
+                            log_audit('error', f"Step 1: Error cleaning up stale lock for {service.name}: {e}", service)
                 
                 # Try to acquire a lock for this service
-                lock = Lock(redis_client, lock_key, timeout=300, blocking_timeout=5)
+                lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=5)  # Reduced timeout to 60 seconds
                 if not lock.acquire():
                     # Check if the lock is actually held by another process
                     lock_owner = redis_client.get(f"{lock_key}:owner")
                     if lock_owner:
-                        logger.warning(f"Lock for IMAP service {service.name} is held by process {lock_owner.decode()}")
+                        logger.warning(f"Step 1: Lock for service {service.name} is held by process {lock_owner.decode()}")
+                        log_audit('warning', f"Step 1: Lock for service {service.name} is held by process {lock_owner.decode()}", service)
                     else:
-                        logger.warning(f"Could not acquire lock for IMAP service {service.name}, but no owner found")
+                        logger.warning(f"Step 1: Could not acquire lock for service {service.name}, but no owner found")
+                        log_audit('warning', f"Step 1: Could not acquire lock for service {service.name}, but no owner found", service)
                     continue
                 
                 # Log start of polling
                 log_audit(
-                    'imap_poll',
-                    f"Step 1: Starting IMAP poll for {service.name}",
+                    'incoming_poll',
+                    f"Step 1: Checking {service.name} for new messages",
                     service
                 )
                 
@@ -87,202 +110,523 @@ def poll_imap_services():
                 # Poll for new messages
                 result = plugin.retrieve_messages(service)
                 if result is None:
-                    error_msg = f"Step 1: Error retrieving messages: None"
+                    error_msg = f"Step 1: Error retrieving messages from {service.name}: Plugin returned None"
                     logger.error(error_msg)
                     log_audit('error', error_msg, service)
                     continue
                 
                 # Log polling results
-                log_audit(
-                    'imap_poll',
-                    f"Step 1: Retrieved {result.get('stored', 0)} messages, processed {result.get('processed', 0)} messages",
-                    service
-                )
+                stored = result.get('stored', 0)
+                processed = result.get('processed', 0)
+                
+                if stored == 0 and processed == 0:
+                    log_audit(
+                        'incoming_poll',
+                        f"Step 1: No new messages found in {service.name}",
+                        service
+                    )
+                else:
+                    log_audit(
+                        'incoming_poll',
+                        f"Step 1: Found {stored} new message{'s' if stored != 1 else ''} in {service.name}",
+                        service
+                    )
                 
             except Exception as e:
-                error_msg = f"Step 1: Error polling IMAP service {service.name}: {str(e)}"
+                error_msg = f"Step 1: Error polling service {service.name}: {str(e)}"
                 logger.error(error_msg)
                 log_audit('error', error_msg, service)
             finally:
-                if lock:
+                if lock and lock.locked():
                     try:
                         lock.release()
                     except Exception as e:
-                        logger.error(f"Error releasing lock for {service.name}: {e}")
+                        logger.error(f"Step 1: Error releasing lock for {service.name}: {e}")
+                        log_audit('error', f"Step 1: Error releasing lock for {service.name}: {e}", service)
         
         return None
         
     except Exception as e:
-        logger.error(f"Error in poll_imap_services: {str(e)}")
+        error_msg = f"Step 1: Error in poll_incoming_services task: {str(e)}"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
         return None
 
 @shared_task
 def process_outgoing_messages():
-    """Process outgoing messages from the queue."""
+    """
+    Step 4: Queue outgoing messages for delivery.
+    This task:
+    1. Gets all queued messages from service-specific outgoing tables
+    2. For each message:
+       - Gets all active users for that service
+       - Creates queue entries in core_message_queue
+       - Updates service-specific message status
+    3. Handles special cases (invitations)
+    4. Skips queueing messages for the original sender
+    """
     try:
-        # Get all queued messages
+        # Get all service instances with outgoing enabled
+        service_instances = Service.objects.filter(
+            outgoing_enabled=True
+        )
+        
+        total_services = service_instances.count()
+        if total_services == 0:
+            log_audit(
+                'outgoing_queue',
+                "Step 4: No active outgoing services configured",
+                None
+            )
+            return None
+            
+        # Log start of queueing cycle
+        log_audit(
+            'outgoing_queue',
+            f"Step 4: Starting queueing cycle for {total_services} outgoing service{'s' if total_services > 1 else ''}",
+            None
+        )
+        
+        total_queued = 0
+        total_skipped = 0
+        for service_instance in service_instances:
+            try:
+                # Get the outgoing message model
+                outgoing_model = service_instance.get_message_model('outgoing')
+                if not outgoing_model:
+                    error_msg = f"Step 4: Could not get outgoing message model for {service_instance.name}"
+                    logger.error(error_msg)
+                    log_audit('error', error_msg, service_instance)
+                    continue
+                
+                # Get new messages
+                new_messages = outgoing_model.objects.filter(
+                    status='new'
+                )
+                
+                message_count = new_messages.count()
+                if message_count == 0:
+                    log_audit(
+                        'outgoing_queue',
+                        f"Step 4: No new messages to queue for {service_instance.name}",
+                        service_instance
+                    )
+                    continue
+                
+                # Log start of processing for this service
+                log_audit(
+                    'outgoing_queue',
+                    f"Step 4: Processing {message_count} new message{'s' if message_count > 1 else ''} for {service_instance.name}",
+                    service_instance
+                )
+                
+                for message in new_messages:
+                    try:
+                        # Get all active users for this service
+                        active_users = UserService.objects.filter(
+                            service_instance=service_instance,
+                            is_active=True
+                        ).select_related('user')
+                        
+                        users_queued = 0
+                        for user_activation in active_users:
+                            # Skip if this user is the original sender
+                            if user_activation.user.email == message.raingull_message.sender:
+                                skip_reason = (
+                                    f"Step 4: Message {message.raingull_id} skipped for user {user_activation.user.username} "
+                                    f"as they are the original sender (sender: {message.raingull_message.sender}, "
+                                    f"service: {service_instance.name})"
+                                )
+                                logger.info(skip_reason)
+                                log_audit(
+                                    'outgoing_queue',
+                                    skip_reason,
+                                    service_instance
+                                )
+                                total_skipped += 1
+                                continue
+                            
+                            # Create queue entry
+                            MessageQueue.objects.create(
+                                raingull_message=message.raingull_message,
+                                user=user_activation.user,
+                                service_instance=service_instance,
+                                status='queued'
+                            )
+                            users_queued += 1
+                            total_queued += 1
+                        
+                        # Update message status
+                        message.status = 'queued'
+                        message.save()
+                        
+                        log_audit(
+                            'outgoing_queue',
+                            f"Step 4: Queued message {message.raingull_id} for {users_queued} user{'s' if users_queued > 1 else ''} in {service_instance.name}",
+                            service_instance
+                        )
+                        
+                    except Exception as e:
+                        error_msg = f"Step 4: Error queueing message {message.raingull_id} for {service_instance.name}: {str(e)}"
+                        logger.error(error_msg)
+                        log_audit('error', error_msg, service_instance)
+                        continue
+                
+            except Exception as e:
+                error_msg = f"Step 4: Error processing messages for {service_instance.name}: {str(e)}"
+                logger.error(error_msg)
+                log_audit('error', error_msg, service_instance)
+                continue
+        
+        # Log final queueing summary
+        summary_msg = (
+            f"Step 4: Queueing complete - "
+            f"Queued: {total_queued}, "
+            f"Skipped: {total_skipped}, "
+            f"Total: {total_queued + total_skipped}"
+        )
+        logger.info(summary_msg)
+        log_audit(
+            'outgoing_queue',
+            summary_msg,
+            None
+        )
+        
+    except Exception as e:
+        error_msg = f"Step 4: Error in process_outgoing_messages task: {str(e)}"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
+        return None
+
+@shared_task
+def send_queued_messages():
+    """
+    Step 5: Send queued messages through their respective services.
+    This task:
+    1. Gets all queued messages from core_message_queue
+    2. For each message:
+       - Gets the appropriate plugin instance
+       - Sends the message through the service
+       - Updates message status
+    3. Handles retries with exponential backoff
+    4. Tracks delivery status for each user
+    5. Marks original messages as fully processed when all copies are sent
+    
+    Lock Key Format: send_message:{message.raingull_message.raingull_id}
+    """
+    try:
+        # Get all queued and failed messages that haven't exceeded retry limit
         queued_messages = MessageQueue.objects.filter(
-            status='queued'
+            Q(status='queued') | 
+            Q(status='failed', retry_count__lt=settings.MAX_MESSAGE_RETRIES)
         ).select_related(
             'raingull_message',
             'user',
             'service_instance'
-        )
+        ).order_by('created_at')  # Process oldest messages first
         
         message_count = queued_messages.count()
+        if message_count == 0:
+            log_audit(
+                'outgoing_send',
+                "Step 5: No messages to send in queue",
+                None
+            )
+            return None
+            
+        # Log start of sending cycle
         log_audit(
             'outgoing_send',
-            f"Step 4: Starting processing of {message_count} outgoing messages"
+            f"Step 5: Starting sending cycle for {message_count} message{'s' if message_count > 1 else ''}",
+            None
         )
         
+        total_sent = 0
+        total_failed = 0
+        total_retrying = 0
+        
+        # Group messages by service to optimize plugin initialization
+        messages_by_service = {}
         for message in queued_messages:
+            service_id = message.service_instance.id
+            if service_id not in messages_by_service:
+                messages_by_service[service_id] = []
+            messages_by_service[service_id].append(message)
+        
+        for service_id, service_messages in messages_by_service.items():
             try:
-                # Create a unique lock key for this message
-                lock_key = f"send_message:{message.raingull_id}"
-                
-                # Try to acquire a lock for this message
-                lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
-                if not lock.acquire():
-                    logger.warning(f"Could not acquire lock for message {message.raingull_id}, skipping")
+                # Get plugin instance once per service
+                plugin = service_messages[0].service_instance.get_plugin_instance()
+                if not plugin:
+                    error_msg = f"Step 5: Could not get plugin instance for {service_messages[0].service_instance.name}"
+                    logger.error(error_msg)
+                    log_audit('error', error_msg, service_messages[0].service_instance)
                     continue
                 
-                try:
-                    # Get the plugin instance
-                    plugin = message.service_instance.get_plugin_instance()
-                    if not plugin:
-                        error_msg = f"Step 4: Could not get plugin instance for {message.service_instance.name}"
-                        logger.error(error_msg)
-                        log_audit('error', error_msg, message.service_instance)
-                        continue
-                    
-                    # Check if this is an invitation message
-                    is_invitation = message.raingull_message.headers and message.raingull_message.headers.get('is_invitation') == 'true'
-                    
-                    # Get the user's service activation
+                for message in service_messages:
                     try:
-                        user_activation = UserService.objects.get(
-                            user=message.user,
-                            service_instance=message.service_instance,
-                            is_active=True
-                        )
-                    except UserService.DoesNotExist:
-                        # If this is an invitation message, we can proceed without an active activation
-                        if is_invitation:
-                            # Try to get the existing activation (even if disabled)
+                        # Check if this is a retry and if we need to wait
+                        if message.status == 'failed':
+                            # Calculate next retry time with exponential backoff
+                            retry_delay = min(
+                                settings.MAX_RETRY_DELAY,
+                                settings.MIN_RETRY_DELAY * (2 ** message.retry_count)
+                            )
+                            next_retry = message.last_retry_at + timedelta(minutes=retry_delay)
+                            if timezone.now() < next_retry:
+                                retry_info = (
+                                    f"Step 5: Message {message.raingull_message.raingull_id} not ready for retry yet "
+                                    f"(attempt {message.retry_count + 1}/{settings.MAX_MESSAGE_RETRIES}, "
+                                    f"next attempt at {next_retry}, "
+                                    f"user: {message.user.username}, "
+                                    f"service: {message.service_instance.name})"
+                                )
+                                logger.info(retry_info)
+                                log_audit(
+                                    'outgoing_send',
+                                    retry_info,
+                                    message.service_instance
+                                )
+                                total_retrying += 1
+                                continue
+                        
+                        # Create a unique lock key for this message
+                        lock_key = f"send_message:{message.raingull_message.raingull_id}"
+                        
+                        # Check for stale lock
+                        lock_exists = redis_client.exists(lock_key)
+                        if lock_exists:
+                            lock_owner = redis_client.get(f"{lock_key}:owner")
+                            if not lock_owner:
+                                logger.warning(f"Step 5: Found stale lock for message {message.raingull_message.raingull_id}, cleaning up")
+                                try:
+                                    redis_client.delete(lock_key)
+                                    redis_client.delete(f"{lock_key}:owner")
+                                except Exception as e:
+                                    logger.error(f"Step 5: Error cleaning up stale lock for message {message.raingull_message.raingull_id}: {e}")
+                                    log_audit('error', f"Step 5: Error cleaning up stale lock for message {message.raingull_message.raingull_id}: {e}")
+                        
+                        # Try to acquire a lock for this message
+                        lock = Lock(redis_client, lock_key, timeout=settings.MESSAGE_LOCK_TIMEOUT, blocking_timeout=settings.MESSAGE_LOCK_BLOCKING_TIMEOUT)
+                        if not lock.acquire():
+                            # Check if the lock is actually held by another process
+                            lock_owner = redis_client.get(f"{lock_key}:owner")
+                            if lock_owner:
+                                logger.warning(f"Step 5: Lock for message {message.raingull_message.raingull_id} is held by process {lock_owner.decode()}")
+                                log_audit('warning', f"Step 5: Lock for message {message.raingull_message.raingull_id} is held by process {lock_owner.decode()}")
+                            else:
+                                logger.warning(f"Step 5: Could not acquire lock for message {message.raingull_message.raingull_id}, but no owner found")
+                                log_audit('warning', f"Step 5: Could not acquire lock for message {message.raingull_message.raingull_id}, but no owner found")
+                            continue
+                        
+                        try:
+                            # Check if this is an invitation message
+                            is_invitation = message.raingull_message.headers and message.raingull_message.headers.get('is_invitation') == 'true'
+                            
+                            # Get the user's service activation
                             try:
                                 user_activation = UserService.objects.get(
                                     user=message.user,
-                                    service_instance=message.service_instance
-                                )
-                                # Temporarily enable it and update the config if needed
-                                user_activation.is_active = True
-                                if not user_activation.config.get('email_address'):
-                                    user_activation.config['email_address'] = message.raingull_message.headers.get('recipient_email')
-                                user_activation.save()
-                            except UserService.DoesNotExist:
-                                # Create a new activation if none exists
-                                user_activation = UserService.objects.create(
-                                    user=message.user,
                                     service_instance=message.service_instance,
-                                    is_active=True,
-                                    config={'email_address': message.raingull_message.headers.get('recipient_email')}
+                                    is_active=True
                                 )
-                        else:
-                            error_msg = f"Step 4: User {message.user.username} is not activated for service {message.service_instance.name}"
-                            logger.error(error_msg)
-                            message.status = 'failed'
-                            message.error_message = error_msg
-                            message.save()
-                            log_audit('error', error_msg, message.service_instance)
-                            continue
-                    
-                    # Get the recipient email from the user's service activation
-                    recipient_email = user_activation.config.get('email_address')
-                    if not recipient_email:
-                        error_msg = f"Step 4: No email address configured for user {message.user.username} in service {message.service_instance.name}"
+                            except UserService.DoesNotExist:
+                                # If this is an invitation message, we can proceed without an active activation
+                                if is_invitation:
+                                    # Try to get the existing activation (even if disabled)
+                                    try:
+                                        user_activation = UserService.objects.get(
+                                            user=message.user,
+                                            service_instance=message.service_instance
+                                        )
+                                        # Temporarily enable it and update the config if needed
+                                        user_activation.is_active = True
+                                        if not user_activation.config.get('email_address'):
+                                            user_activation.config['email_address'] = message.raingull_message.headers.get('recipient_email')
+                                        user_activation.save()
+                                    except UserService.DoesNotExist:
+                                        # Create a new activation if none exists
+                                        user_activation = UserService.objects.create(
+                                            user=message.user,
+                                            service_instance=message.service_instance,
+                                            is_active=True,
+                                            config={'email_address': message.raingull_message.headers.get('recipient_email')}
+                                        )
+                                else:
+                                    error_msg = f"Step 5: User {message.user.username} is not activated for service {message.service_instance.name}"
+                                    logger.error(error_msg)
+                                    message.status = 'failed'
+                                    message.error_message = error_msg
+                                    message.retry_count += 1
+                                    message.last_retry_at = timezone.now()
+                                    message.save()
+                                    total_failed += 1
+                                    log_audit('error', error_msg, message.service_instance)
+                                    continue
+                            
+                            # Get the recipient email from the user's service activation
+                            recipient_email = user_activation.config.get('email_address')
+                            if not recipient_email:
+                                error_msg = f"Step 5: No email address configured for user {message.user.username} in service {message.service_instance.name}"
+                                logger.error(error_msg)
+                                message.status = 'failed'
+                                message.error_message = error_msg
+                                message.retry_count += 1
+                                message.last_retry_at = timezone.now()
+                                message.save()
+                                total_failed += 1
+                                log_audit('error', error_msg, message.service_instance)
+                                continue
+                            
+                            # Get the service-specific message
+                            outgoing_model = message.service_instance.get_message_model('outgoing')
+                            service_message = outgoing_model.objects.get(
+                                raingull_id=message.raingull_message.raingull_id
+                            )
+                            
+                            # Prepare message data for sending
+                            message_data = {
+                                'to': recipient_email,  # Use the email from user's service activation
+                                'subject': service_message.subject,
+                                'body': service_message.body,
+                                'headers': service_message.headers if hasattr(service_message, 'headers') else {}
+                            }
+                            
+                            # Send the message
+                            success = plugin.send_message(message.service_instance, message_data)
+                            
+                            # Update message status based on success
+                            if success:
+                                message.status = 'sent'
+                                message.processed_at = timezone.now()
+                                message.save()
+                                success_msg = (
+                                    f"Step 5: Successfully sent message {message.raingull_message.raingull_id} "
+                                    f"to {recipient_email} via {message.service_instance.name} "
+                                    f"for user {message.user.username}"
+                                )
+                                logger.info(success_msg)
+                                log_audit(
+                                    'outgoing_send',
+                                    success_msg,
+                                    message.service_instance
+                                )
+                                total_sent += 1
+                                
+                                # If this was a temporary activation for an invitation, disable it again
+                                if is_invitation:
+                                    user_activation.is_active = False
+                                    user_activation.save()
+                                    
+                                # Check if all copies of this message have been sent
+                                unsent_copies = MessageQueue.objects.filter(
+                                    raingull_message=message.raingull_message,
+                                    status__in=['queued', 'failed']
+                                ).count()
+                                
+                                if unsent_copies == 0:
+                                    # All copies sent, mark the original message as fully processed
+                                    message.raingull_message.status = 'processed'
+                                    message.raingull_message.processed_at = timezone.now()
+                                    message.raingull_message.save()
+                                    log_audit(
+                                        'outgoing_send',
+                                        f"Step 5: All copies of message {message.raingull_message.raingull_id} have been sent",
+                                        None
+                                    )
+                            else:
+                                error_msg = "Step 5: Failed to send message"
+                                logger.error(error_msg)
+                                message.status = 'failed'
+                                message.error_message = error_msg
+                                message.retry_count += 1
+                                message.last_retry_at = timezone.now()
+                                message.save()
+                                total_failed += 1
+                                log_audit('error', error_msg, message.service_instance)
+                                
+                                # If this was a temporary activation for an invitation, disable it again
+                                if is_invitation:
+                                    user_activation.is_active = False
+                                    user_activation.save()
+                            
+                        finally:
+                            if lock.locked():
+                                try:
+                                    lock.release()
+                                except Exception as e:
+                                    logger.error(f"Step 5: Error releasing lock for message {message.raingull_message.raingull_id}: {e}")
+                                    log_audit('error', f"Step 5: Error releasing lock for message {message.raingull_message.raingull_id}: {e}")
+                        
+                    except Exception as e:
+                        error_msg = f"Step 5: Error processing message: {str(e)}"
                         logger.error(error_msg)
                         message.status = 'failed'
-                        message.error_message = error_msg
+                        message.error_message = str(e)
+                        message.retry_count += 1
+                        message.last_retry_at = timezone.now()
                         message.save()
+                        total_failed += 1
                         log_audit('error', error_msg, message.service_instance)
                         continue
-                    
-                    # Get the service-specific message
-                    outgoing_model = message.service_instance.get_message_model('outgoing')
-                    service_message = outgoing_model.objects.get(
-                        raingull_id=message.raingull_message.raingull_id
-                    )
-                    
-                    # Prepare message data for sending
-                    message_data = {
-                        'to': recipient_email,  # Use the email from user's service activation
-                        'subject': service_message.subject,
-                        'body': service_message.body,
-                        'headers': service_message.headers if hasattr(service_message, 'headers') else {}
-                    }
-                    
-                    # Send the message
-                    success = plugin.send_message(message.service_instance, message_data)
-                    
-                    # Update message status based on success
-                    if success:
-                        message.status = 'sent'
-                        message.processed_at = timezone.now()
-                        message.save()
-                        logger.info(f"Step 4: Successfully sent message to {recipient_email} via {message.service_instance.name}")
-                        log_audit(
-                            'outgoing_send',
-                            f"Step 4: Successfully sent message to {recipient_email} via {message.service_instance.name}",
-                            message.service_instance
-                        )
                         
-                        # If this was a temporary activation for an invitation, disable it again
-                        if is_invitation:
-                            user_activation.is_active = False
-                            user_activation.save()
-                    else:
-                        error_msg = "Step 4: Failed to send message"
-                        logger.error(error_msg)
-                        message.status = 'failed'
-                        message.error_message = error_msg
-                        message.save()
-                        log_audit('error', error_msg, message.service_instance)
-                        
-                        # If this was a temporary activation for an invitation, disable it again
-                        if is_invitation:
-                            user_activation.is_active = False
-                            user_activation.save()
-                    
-                finally:
-                    lock.release()
-                    
             except Exception as e:
-                error_msg = f"Step 4: Error processing message: {e}"
+                error_msg = f"Step 5: Error processing messages for service {service_id}: {str(e)}"
                 logger.error(error_msg)
-                message.status = 'failed'
-                message.error_message = str(e)
-                message.save()
-                log_audit('error', error_msg, message.service_instance)
+                log_audit('error', error_msg)
                 continue
                 
+        # Log final sending summary
+        summary_msg = (
+            f"Step 5: Sending complete - "
+            f"Sent: {total_sent}, "
+            f"Failed: {total_failed}, "
+            f"Retrying: {total_retrying}, "
+            f"Total: {message_count}"
+        )
+        logger.info(summary_msg)
+        log_audit(
+            'outgoing_send',
+            summary_msg,
+            None
+        )
+        
     except Exception as e:
-        error_msg = f"Step 4: Error in process_outgoing_messages task: {e}"
+        error_msg = f"Step 5: Error in send_queued_messages task: {str(e)}"
         logger.error(error_msg)
         log_audit('error', error_msg)
+        return None
 
 @shared_task
 def process_incoming_messages():
     """
-    Process and translate incoming messages from all service instances.
+    Step 2: Process and translate incoming messages from all service instances.
     This task:
     1. Checks all incoming service instances for new messages
     2. Translates them based on the plugin manifest
     3. Stores them in the standard Message table
+    4. Marks them for distribution in Step 3
     """
     try:
         # Get all service instances with incoming enabled
         service_instances = Service.objects.filter(
             incoming_enabled=True
+        )
+        
+        total_services = service_instances.count()
+        if total_services == 0:
+            log_audit(
+                'incoming_process',
+                "Step 2: No active incoming services configured",
+                None
+            )
+            return None
+            
+        # Log start of processing cycle
+        log_audit(
+            'incoming_process',
+            f"Step 2: Starting processing cycle for {total_services} incoming service{'s' if total_services > 1 else ''}",
+            None
         )
         
         total_processed = 0
@@ -314,6 +658,21 @@ def process_incoming_messages():
                     status='new'
                 )
                 
+                message_count = new_messages.count()
+                if message_count == 0:
+                    log_audit(
+                        'incoming_process',
+                        f"Step 2: No new messages to process in {instance.name}",
+                        instance
+                    )
+                    continue
+                    
+                log_audit(
+                    'incoming_process',
+                    f"Step 2: Processing {message_count} new message{'s' if message_count > 1 else ''} in {instance.name}",
+                    instance
+                )
+                
                 messages_processed = 0
                 for message in new_messages:
                     # Create a unique lock key for this message
@@ -332,7 +691,6 @@ def process_incoming_messages():
                             
                             # Create a new Raingull standard message
                             standard_message = Message.create_standard_message(
-                                raingull_id=message.raingull_id,
                                 source_service=instance,
                                 source_message_id=message.source_message_id,
                                 subject=message.subject,
@@ -340,7 +698,8 @@ def process_incoming_messages():
                                 sender=message.sender,
                                 recipients=message.recipients,
                                 date=parsedate_to_datetime(message.date),
-                                headers=message.headers if hasattr(message, 'headers') else {}
+                                headers=message.headers if hasattr(message, 'headers') else {},
+                                raingull_id=message.raingull_id
                             )
                             
                             # Mark the original message as processed
@@ -351,7 +710,7 @@ def process_incoming_messages():
                             messages_processed += 1
                             total_processed += 1
                         else:
-                            logger.warning(f"Could not acquire lock for message {message.raingull_id}, skipping")
+                            logger.warning(f"Step 2: Could not acquire lock for message {message.raingull_id}, skipping")
                             continue
                             
                     except Exception as e:
@@ -364,7 +723,11 @@ def process_incoming_messages():
                             lock.release()
                 
                 if messages_processed > 0:
-                    log_audit('message_processed', f"Step 2: Processed {messages_processed} messages from {instance.name}", instance)
+                    log_audit(
+                        'incoming_process',
+                        f"Step 2: Successfully processed {messages_processed} message{'s' if messages_processed > 1 else ''} from {instance.name}",
+                        instance
+                    )
                 
             except Exception as e:
                 error_msg = f"Step 2: Error processing messages from {instance.name}: {str(e)}"
@@ -373,69 +736,227 @@ def process_incoming_messages():
                 continue
         
         if total_processed > 0:
-            log_audit('message_processed', f"Step 2: Processed {total_processed} incoming messages across all services")
+            log_audit(
+                'incoming_process',
+                f"Step 2: Successfully processed {total_processed} message{'s' if total_processed > 1 else ''} across all services",
+                None
+            )
+        else:
+            log_audit(
+                'incoming_process',
+                "Step 2: No new messages to process across all services",
+                None
+            )
         
-        logger.info(f"Step 2: Processed {total_processed} incoming messages")
-        return f"Successfully processed {total_processed} messages"
+        return None
         
     except Exception as e:
         error_msg = f"Step 2: Error in process_incoming_messages task: {str(e)}"
         logger.error(error_msg)
         log_audit('error', error_msg)
-        raise
+        return None
 
 @shared_task
 def distribute_outgoing_messages():
-    """Distribute outgoing messages to active users."""
+    """
+    Step 3: Distribute messages from the core to service-specific outgoing tables.
+    This task:
+    1. Finds new messages that haven't been distributed yet
+    2. For each active outgoing service:
+       - Translates the message to the service format
+       - Creates an entry in the service's outgoing table
+    3. Creates MessageDistribution records to track the distribution
+    """
     try:
-        # Get all active users with active service activations
-        active_users = UserService.objects.filter(
-            is_active=True,
-            user__is_active=True  # Only distribute to active users
-        ).select_related('user', 'service_instance')
+        # Get all service instances with outgoing enabled
+        service_instances = Service.objects.filter(
+            outgoing_enabled=True
+        )
         
-        # Group by service instance
-        service_groups = {}
-        for activation in active_users:
-            if activation.service_instance not in service_groups:
-                service_groups[activation.service_instance] = []
-            service_groups[activation.service_instance].append(activation)
+        total_services = service_instances.count()
+        if total_services == 0:
+            log_audit(
+                'outgoing_process',
+                "Step 3: No active outgoing services configured",
+                None
+            )
+            return None
+            
+        # Log start of processing cycle
+        log_audit(
+            'outgoing_process',
+            f"Step 3: Starting distribution cycle for {total_services} outgoing service{'s' if total_services > 1 else ''}",
+            None
+        )
         
-        # Process each service instance
-        for service_instance, activations in service_groups.items():
+        # Get new messages that haven't been distributed yet
+        # These are messages that:
+        # 1. Have no MessageDistribution records (new from Step 2)
+        # 2. Have at least one pending distribution (retry failed distributions)
+        new_messages = Message.objects.filter(
+            Q(messagedistribution__isnull=True) |  # New messages from Step 2
+            Q(messagedistribution__status='failed')  # Failed distributions to retry
+        ).distinct().select_related('source_service')
+        
+        message_count = new_messages.count()
+        if message_count == 0:
+            log_audit(
+                'outgoing_process',
+                "Step 3: No new messages to distribute",
+                None
+            )
+            return None
+            
+        log_audit(
+            'outgoing_process',
+            f"Step 3: Found {message_count} new message{'s' if message_count > 1 else ''} to distribute",
+            None
+        )
+        
+        total_distributed = 0
+        for message in new_messages:
             try:
-                # Get unprocessed messages for this service
-                messages = Message.objects.filter(
-                    source_service=service_instance,
-                    processed=False
-                )
+                # Create a unique lock key for this message
+                lock_key = f"distribute_message:{message.raingull_id}"
                 
-                for message in messages:
-                    # Skip invitation messages
-                    if message.headers and message.headers.get('is_invitation') == 'true':
-                        continue
-                        
-                    # Queue message for each active user
-                    for activation in activations:
-                        MessageQueue.objects.create(
-                            raingull_message=message,
-                            user=activation.user,
-                            service_instance=service_instance,
-                            raingull_id=message.raingull_id,
-                            status='queued'
-                        )
-                    
-                    # Mark message as processed
-                    message.processed = True
-                    message.save()
+                # Check for stale lock
+                lock_exists = redis_client.exists(lock_key)
+                if lock_exists:
+                    lock_owner = redis_client.get(f"{lock_key}:owner")
+                    if not lock_owner:
+                        logger.warning(f"Step 3: Found stale lock for message {message.raingull_id}, cleaning up")
+                        try:
+                            redis_client.delete(lock_key)
+                            redis_client.delete(f"{lock_key}:owner")
+                        except Exception as e:
+                            logger.error(f"Step 3: Error cleaning up stale lock for message {message.raingull_id}: {e}")
+                            log_audit('error', f"Step 3: Error cleaning up stale lock for message {message.raingull_id}: {e}")
+                
+                # Try to acquire a lock for this message
+                lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=5)
+                if not lock.acquire():
+                    # Check if the lock is actually held by another process
+                    lock_owner = redis_client.get(f"{lock_key}:owner")
+                    if lock_owner:
+                        logger.warning(f"Step 3: Lock for message {message.raingull_id} is held by process {lock_owner.decode()}")
+                        log_audit('warning', f"Step 3: Lock for message {message.raingull_id} is held by process {lock_owner.decode()}")
+                    else:
+                        logger.warning(f"Step 3: Could not acquire lock for message {message.raingull_id}, but no owner found")
+                        log_audit('warning', f"Step 3: Could not acquire lock for message {message.raingull_id}, but no owner found")
+                    continue
+                
+                try:
+                    # Process for each service
+                    for service_instance in service_instances:
+                        try:
+                            # Skip if this service already has a successful distribution
+                            if MessageDistribution.objects.filter(
+                                message=message,
+                                service_instance=service_instance,
+                                status='formatted'
+                            ).exists():
+                                continue
+                            
+                            # Get the plugin instance
+                            plugin = service_instance.get_plugin_instance()
+                            if not plugin:
+                                error_msg = f"Step 3: Could not get plugin instance for {service_instance.name}"
+                                logger.error(error_msg)
+                                log_audit('error', error_msg, service_instance)
+                                continue
+                            
+                            # Get the outgoing message model
+                            outgoing_model = service_instance.get_message_model('outgoing')
+                            if not outgoing_model:
+                                error_msg = f"Step 3: Could not get outgoing message model for {service_instance.name}"
+                                logger.error(error_msg)
+                                log_audit('error', error_msg, service_instance)
+                                continue
+                            
+                            # Translate the message to the service format
+                            try:
+                                translated_message = plugin.translate_from_raingull(message)
+                            except Exception as e:
+                                error_msg = f"Step 3: Error translating message for {service_instance.name}: {str(e)}"
+                                logger.error(error_msg)
+                                log_audit('error', error_msg, service_instance)
+                                continue
+                            
+                            # Create the outgoing message
+                            try:
+                                outgoing_message = outgoing_model.objects.create(
+                                    raingull_id=message.raingull_id,
+                                    to=translated_message['to'],
+                                    subject=translated_message['subject'],
+                                    body=translated_message['body'],
+                                    headers=translated_message['headers'],
+                                    status='queued',
+                                    created_at=timezone.now()
+                                )
+                            except Exception as e:
+                                error_msg = f"Step 3: Error creating outgoing message for {service_instance.name}: {str(e)}"
+                                logger.error(error_msg)
+                                log_audit('error', error_msg, service_instance)
+                                continue
+                            
+                            # Create or update distribution record
+                            try:
+                                distribution, created = MessageDistribution.objects.get_or_create(
+                                    message=message,
+                                    service_instance=service_instance,
+                                    defaults={'status': 'formatted'}
+                                )
+                                if not created:
+                                    distribution.status = 'formatted'
+                                    distribution.error_message = None
+                                    distribution.save()
+                            except Exception as e:
+                                error_msg = f"Step 3: Error creating distribution record for {service_instance.name}: {str(e)}"
+                                logger.error(error_msg)
+                                log_audit('error', error_msg, service_instance)
+                                continue
+                            
+                            total_distributed += 1
+                            logger.info(f"Step 3: Successfully distributed message {message.raingull_id} to {service_instance.name}")
+                            
+                        except Exception as e:
+                            error_msg = f"Step 3: Error processing message for {service_instance.name}: {str(e)}"
+                            logger.error(error_msg)
+                            log_audit('error', error_msg, service_instance)
+                            continue
+                            
+                finally:
+                    if lock.locked():
+                        try:
+                            lock.release()
+                        except Exception as e:
+                            logger.error(f"Step 3: Error releasing lock for message {message.raingull_id}: {e}")
+                            log_audit('error', f"Step 3: Error releasing lock for message {message.raingull_id}: {e}")
                     
             except Exception as e:
-                logger.error(f"Error processing messages for service {service_instance.name}: {e}")
+                error_msg = f"Step 3: Error processing message: {str(e)}"
+                logger.error(error_msg)
+                log_audit('error', error_msg)
                 continue
                 
+        if total_distributed > 0:
+            log_audit(
+                'outgoing_process',
+                f"Step 3: Successfully distributed {total_distributed} message{'s' if total_distributed > 1 else ''} across all services",
+                None
+            )
+        else:
+            log_audit(
+                'outgoing_process',
+                "Step 3: No messages were distributed across all services",
+                None
+            )
+        
     except Exception as e:
-        logger.error(f"Error in distribute_outgoing_messages: {e}")
-        log_audit('error', f"Error in distribute_outgoing_messages: {e}")
+        error_msg = f"Step 3: Error in distribute_outgoing_messages task: {str(e)}"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
+        return None
 
 @shared_task
 def process_service_messages():
@@ -467,9 +988,39 @@ def format_outgoing_messages():
             outgoing_enabled=True
         )
         
+        service_count = outgoing_services.count()
+        if service_count == 0:
+            log_audit(
+                'outgoing_format',
+                "Step 3: No active outgoing services configured",
+                None
+            )
+            return None
+            
+        log_audit(
+            'outgoing_format',
+            f"Step 3: Starting formatting cycle for {service_count} outgoing service(s)",
+            None
+        )
+        
         # Get unprocessed messages
         unprocessed_messages = Message.objects.filter(
             processed=False
+        )
+        
+        message_count = unprocessed_messages.count()
+        if message_count == 0:
+            log_audit(
+                'outgoing_format',
+                "Step 3: No new messages to format",
+                None
+            )
+            return None
+            
+        log_audit(
+            'outgoing_format',
+            f"Step 3: Processing {message_count} message{'s' if message_count > 1 else ''} for formatting",
+            None
         )
         
         total_formatted = 0
@@ -494,7 +1045,9 @@ def format_outgoing_messages():
                     # Get the plugin instance
                     plugin = service.get_plugin_instance()
                     if not plugin:
-                        logger.error(f"Step 3: Could not get plugin instance for {service.name}")
+                        error_msg = f"Step 3: Could not get plugin instance for {service.name}"
+                        logger.error(error_msg)
+                        log_audit('error', error_msg, service)
                         distribution.status = 'failed'
                         distribution.error_message = "Could not get plugin instance"
                         distribution.save()
@@ -503,7 +1056,9 @@ def format_outgoing_messages():
                     # Get the outgoing message model
                     outgoing_model = service.get_message_model('outgoing')
                     if not outgoing_model:
-                        logger.error(f"Step 3: Could not get outgoing message model for {service.name}")
+                        error_msg = f"Step 3: Could not get outgoing message model for {service.name}"
+                        logger.error(error_msg)
+                        log_audit('error', error_msg, service)
                         distribution.status = 'failed'
                         distribution.error_message = "Could not get outgoing message model"
                         distribution.save()
@@ -513,7 +1068,7 @@ def format_outgoing_messages():
                     lock_key = f"format_message:{service.id}:{message.raingull_id}"
                     
                     # Try to acquire a lock for this message and service
-                    lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
+                    lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=5)
                     try:
                         if lock.acquire():
                             # Check if message was already formatted for this service
@@ -536,15 +1091,21 @@ def format_outgoing_messages():
                             
                             distribution.status = 'formatted'
                             distribution.save()
-                            total_formatted += 1
                             
+                            total_formatted += 1
+                            log_audit(
+                                'outgoing_format',
+                                f"Step 3: Successfully formatted message for {service.name}",
+                                service
+                            )
                         else:
-                            logger.warning(f"Could not acquire lock for message {message.raingull_id} and service {service.name}, skipping")
+                            logger.warning(f"Step 3: Could not acquire lock for message {message.raingull_id} in {service.name}, skipping")
                             continue
                             
                     except Exception as e:
                         error_msg = f"Step 3: Error formatting message for {service.name}: {str(e)}"
                         logger.error(error_msg)
+                        log_audit('error', error_msg, service)
                         distribution.status = 'failed'
                         distribution.error_message = str(e)
                         distribution.save()
@@ -554,30 +1115,31 @@ def format_outgoing_messages():
                             lock.release()
                             
                 except Exception as e:
-                    error_msg = f"Step 3: Error processing message for {service.name}: {str(e)}"
+                    error_msg = f"Step 3: Error processing distribution for {service.name}: {str(e)}"
                     logger.error(error_msg)
-                    distribution.status = 'failed'
-                    distribution.error_message = str(e)
-                    distribution.save()
+                    log_audit('error', error_msg, service)
                     continue
-            
-            # Check if all services have received their copies
-            if not MessageDistribution.objects.filter(
-                message=message,
-                status__in=['pending', 'failed']
-            ).exists():
-                message.processed = True
-                message.save()
-                logger.info(f"Step 3: All services have received their copies of message {message.raingull_id}")
         
-        logger.info(f"Step 3: Formatted {total_formatted} outgoing messages")
-        return f"Successfully formatted {total_formatted} messages"
+        if total_formatted > 0:
+            log_audit(
+                'outgoing_format',
+                f"Step 3: Successfully formatted {total_formatted} message{'s' if total_formatted > 1 else ''} across all services",
+                None
+            )
+        else:
+            log_audit(
+                'outgoing_format',
+                "Step 3: No messages required formatting",
+                None
+            )
+        
+        return None
         
     except Exception as e:
         error_msg = f"Step 3: Error in format_outgoing_messages task: {str(e)}"
         logger.error(error_msg)
         log_audit('error', error_msg)
-        raise
+        return None
 
 @shared_task
 def distribute_messages():

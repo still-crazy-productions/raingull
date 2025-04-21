@@ -1,19 +1,18 @@
-## Raingull Project Log (Updated April 20, 2024)
+## Raingull Project Log (Updated April 21, 2025)
 
 ### ✅ Recent Changes:
 
-1. **Plugin Manager Implementation**
-   - Created plugin manager view and template
-   - Added dynamic plugin scanning from plugins directory
-   - Implemented enable/disable functionality for plugins
-   - Added plugin manager to navigation menu
-   - Removed Twilio plugins for future reimplementation
+1. **Dynamic Table Management**
+   - Fixed table naming convention to use `{plugin_name}_{instance.id}_{direction}` format
+   - Implemented proper table creation and deletion for services
+   - Added robust error handling for model registration and table operations
+   - Verified proper handling of both IMAP and SMTP service tables
 
-2. **Navigation Improvements**
-   - Reorganized navigation menu for better user experience
-   - Added Plugin Manager link
-   - Improved message display styling
-   - Enhanced overall layout consistency
+2. **Service Management**
+   - Improved service creation and deletion process
+   - Added proper error handling for dynamic model operations
+   - Verified correct table creation and deletion for both IMAP and SMTP services
+   - Implemented fallback mechanisms for table deletion
 
 ### ✅ Accomplishments:
 
@@ -66,7 +65,8 @@
 
 ### ⚠️ Current Known Issues:
 
-- None - Core functionality is stable
+- Model registration warnings in development environment (expected behavior)
+- SQLite foreign key constraint warnings during table deletion (handled by fallback mechanism)
 
 ### 🚧 Next Immediate Steps:
 
@@ -81,9 +81,37 @@
 cd ~/dev/raingull
 git status
 git add .
-git commit -m "Added plugin manager and improved navigation"
+git commit -m "Fixed dynamic table management and service operations"
 git push origin main
 ```
+
+## 2025-04-21
+- Fixed database table names to use consistent naming:
+  - Changed `core_user` to `core_users`
+  - Confirmed `core_user_permissions` is correct
+  - Updated initial migration file to reflect correct table names
+  - Verified all other model table names are correct
+- Identified issue with user activation URL pattern (to be fixed later):
+  - Current pattern expects only token parameter
+  - Code trying to pass both uidb64 and token
+  - Will need to update URL pattern when implementing invitation email functionality
+
+## 2024-04-20
+- Renamed tables to be more consistent and descriptive:
+  - `core_raingullstandardmessage` → `core_messages`
+  - `core_outgoingmessagequeue` → `core_message_queues`
+  - `core_raingulluser` → `core_users` (using standard Django User model)
+  - `core_raingulluser_groups` → `core_user_groups` (using standard Django Group model)
+  - `core_plugin` → `core_plugins`
+  - `core_userserviceactivation` → `core_user_services`
+- Switched from custom `RaingullUser` model to standard Django User model
+- Moved user-specific fields to `UserProfile` model:
+  - timezone
+  - mfa_enabled
+  - mfa_secret
+  - web_login_enabled
+- Added Django admin interface
+- Created default groups: 'Admins' and 'Moderators'
 
 ## 2024-04-16
 - Implemented RaingullStandardMessage model for unified message format
@@ -98,8 +126,6 @@ git push origin main
 - Added test connection functionality for SMTP service instances
 - Verified proper handling of different encryption types
 - Confirmed dynamic table creation and deletion
-- Fixed test connection view to match IMAP plugin pattern
-- Added comprehensive error handling for SMTP operations
 
 ## 2024-03-21
 - Implemented dynamic configuration fields for ServiceInstance based on plugin manifest
@@ -197,3 +223,105 @@ git push origin main
 - Drop the `PluginInstance` table
 - Fix Test Connection button functionality
 - Implement secure password storage for service configurations
+
+class Message(models.Model):
+    # ... existing fields ...
+    processed = models.BooleanField(default=False)
+
+# In process_incoming_messages
+for message in new_messages:
+    # Create standard message
+    standard_message = Message.create_standard_message(...)
+    standard_message.processed = False  # Mark as unprocessed for Step 3
+    
+    # Create distribution records for all active outgoing services
+    for service in Service.objects.filter(outgoing_enabled=True):
+        # Skip if message is from this service (no echo)
+        if message.source_service == service:
+            continue
+        if MessageDistribution.objects.filter(
+            message=message,
+            service_instance=service,
+            status='formatted'
+        ).exists():
+            continue
+        MessageDistribution.objects.get_or_create(
+            message=standard_message,
+            service=service,
+            defaults={'status': 'pending'}
+        )
+
+# In format_outgoing_messages
+new_messages = Message.objects.filter(
+    Q(messagedistribution__isnull=True) |  # New messages from Step 2
+    Q(messagedistribution__status='failed')  # Failed distributions to retry
+).distinct()
+
+class MessageQueue(models.Model):
+    # ... existing fields ...
+    retry_count = models.IntegerField(default=0)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+
+## 2024-03-21: Message Processing System Improvements
+
+### Step 4: Message Queueing Implementation
+- **Task**: `process_outgoing_messages`
+- **Changes**:
+  - Separated queueing logic from sending logic
+  - Implemented original sender protection
+  - Enhanced error handling and logging
+  - Added proper status tracking
+- **Database Updates**:
+  - Confirmed use of `core_message_queue` (singular)
+  - Verified table relationships and indexes
+- **Audit Logging**:
+  - Added consistent "Step 4:" prefix to logs
+  - Enhanced error context in logs
+  - Improved logging for skipped messages
+- **Performance**:
+  - Implemented proper locking mechanism
+  - Added batch processing capabilities
+  - Optimized database queries
+
+### Step 5: Message Sending Implementation
+- **Task**: `send_queued_messages`
+- **Changes**:
+  - Moved sending logic from Step 4
+  - Implemented retry logic with exponential backoff
+  - Added comprehensive error handling
+  - Enhanced status tracking
+- **Retry Mechanism**:
+  - Added `retry_count` and `last_retry_at` fields
+  - Implemented exponential backoff timing
+  - Set maximum retry limit
+- **Audit Logging**:
+  - Added consistent "Step 5:" prefix to logs
+  - Enhanced error and retry logging
+  - Improved status tracking logs
+- **Error Handling**:
+  - Added service connection error handling
+  - Implemented lock management
+  - Enhanced message status updates
+
+### System Improvements
+- **Message Flow**:
+  - Clear separation between queueing and sending
+  - Improved status tracking across steps
+  - Enhanced error recovery
+- **Performance**:
+  - Optimized database operations
+  - Improved locking mechanisms
+  - Enhanced batch processing
+- **Documentation**:
+  - Updated README.md with detailed pipeline description
+  - Added comprehensive status tracking documentation
+  - Enhanced error handling documentation
+
+### Next Steps
+1. Implement message cleanup system
+2. Add monitoring and alerting
+3. Enhance performance metrics
+4. Add system health checks
+
+## Previous Entries
+// ... existing code ...

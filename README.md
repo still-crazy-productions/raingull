@@ -80,49 +80,142 @@ All static files should be placed in `/core/static/` with the following structur
 
 ## Message Processing Pipeline
 
-The Raingull system processes messages through a 5-step pipeline, with each step handling a specific aspect of message flow. For detailed documentation, see [Message Processing Pipeline](docs/message_processing_pipeline.md).
+The Raingull system processes messages through a 5-step pipeline, with each step handling a specific aspect of message flow. This design ensures reliable message delivery while maintaining clear separation of concerns and robust error handling.
 
-### Step 1: Incoming Message Retrieval
-- **Task**: `poll_imap_services`
-- **Input**: IMAP server
-- **Output**: `plugin_serviceid_in` table (e.g., `imap_incoming_1`)
-- **Purpose**: Retrieves new messages from the IMAP server and stores them in the plugin-specific incoming table
-- **Status Flow**: Messages are stored with `status='new'` to indicate they need processing
+### Step 1: Message Ingestion
+- **Task**: `poll_incoming_services`
+- **Purpose**: Retrieve new messages from incoming services
+- **Process**:
+  1. Polls all active incoming services (e.g., IMAP)
+  2. Retrieves new messages and stores them in service-specific tables (e.g., `imap_1_in`)
+  3. Implements proper locking to prevent duplicate processing
+  4. Maintains detailed audit logs of polling operations
+- **Status Flow**: Messages stored with `status='new'` for processing
+- **Error Handling**: 
+  - Service connection failures
+  - Message retrieval errors
+  - Lock acquisition issues
 
-### Step 2: Core Message Translation
+### Step 2: Message Processing
 - **Task**: `process_incoming_messages`
-- **Input**: `plugin_serviceid_in` table
-- **Output**: `core_messages` table
-- **Purpose**: Translates plugin-specific messages into the standard Raingull message format
-- **Status Flow**: Updates original message to `status='processed'` after successful translation
+- **Purpose**: Translate service-specific messages to standard format
+- **Process**:
+  1. Retrieves new messages from service-specific tables
+  2. Translates to standard Raingull format
+  3. Stores in `core_messages` table
+  4. Updates original message status
+- **Status Flow**: 
+  - Original message: `status='processed'`
+  - New message: `status='new'` for distribution
+- **Error Handling**:
+  - Translation failures
+  - Database errors
+  - Duplicate message detection
 
-### Step 3: Outgoing Service Formatting
-- **Task**: `format_outgoing_messages`
-- **Input**: `core_messages` table
-- **Output**: `plugin_serviceid_out` tables (e.g., `smtp_outgoing_2`)
-- **Purpose**: Creates service-specific formatted copies of messages for each active outgoing service
-- **Status Flow**: Messages are stored with `status='formatted'` to indicate they're ready for distribution
-
-### Step 4: User Distribution
+### Step 3: Message Distribution
 - **Task**: `distribute_outgoing_messages`
-- **Input**: `plugin_serviceid_out` tables
-- **Output**: `core_message_queue` table
-- **Purpose**: Creates queue entries for each active user of each outgoing service
-- **Status Flow**: Queue entries are created with `status='queued'` for delivery
+- **Purpose**: Create service-specific formatted copies
+- **Process**:
+  1. Takes messages from `core_messages`
+  2. For each active outgoing service:
+     - Translates message to service format
+     - Stores in service-specific table (e.g., `smtp_1_out`)
+     - Creates `MessageDistribution` record
+  3. Handles retries for failed distributions
+- **Status Flow**:
+  - Service message: `status='formatted'`
+  - Distribution record: `status='formatted'` or `status='failed'`
+- **Error Handling**:
+  - Service-specific formatting errors
+  - Distribution failures
+  - Lock management issues
 
-### Step 5: Message Delivery
+### Step 4: Message Queueing
 - **Task**: `process_outgoing_messages`
-- **Input**: `core_message_queue` table
-- **Output**: Outgoing service (e.g., SMTP server)
-- **Purpose**: Sends messages using the appropriate outgoing service
-- **Status Flow**: Updates queue entry to `status='sent'` or `status='failed'`
+- **Purpose**: Create individual queue entries for users
+- **Process**:
+  1. Takes messages from service-specific outgoing tables
+  2. For each message:
+     - Gets all active users for that service
+     - Creates queue entries in `core_message_queue`
+     - Skips original sender
+     - Handles special cases (invitations)
+  3. Updates service-specific message status
+- **Status Flow**:
+  - Queue entry: `status='queued'`
+  - Service message: `status='queued'`
+- **Error Handling**:
+  - Missing user activations
+  - Queue creation failures
+  - Invalid recipient addresses
 
-### Key Benefits of the 5-Step Approach
-1. **Clear Separation of Concerns**: Each step handles a specific aspect of message processing
-2. **Data Format Guarantee**: Each outgoing service gets its own properly formatted copy
-3. **Error Isolation**: Issues in one step don't affect others
-4. **Performance**: Formatting happens once per service type, not per user
-5. **Audit Trail**: Clear record of message lifecycle and formatting 
+### Step 5: Message Sending
+- **Task**: `send_queued_messages`
+- **Purpose**: Deliver messages through appropriate services
+- **Process**:
+  1. Takes queued messages from `core_message_queue`
+  2. For each message:
+     - Gets appropriate plugin instance
+     - Sends through service
+     - Updates status
+     - Handles retries with exponential backoff
+  3. Marks messages as fully processed when all copies sent
+- **Status Flow**:
+  - Queue entry: `status='sent'` or `status='failed'`
+  - Original message: `status='processed'` when complete
+- **Error Handling**:
+  - Send failures
+  - Retry management
+  - Service connection issues
+  - Lock management
+
+### Key Features and Benefits
+1. **Clear Separation of Concerns**: Each step has a specific, well-defined responsibility
+2. **Robust Error Handling**: Comprehensive error handling at each step
+3. **Reliable Message Delivery**: Retry logic and status tracking ensure delivery
+4. **Performance Optimization**: 
+   - Message batching by service
+   - Efficient plugin initialization
+   - Proper locking mechanisms
+5. **Comprehensive Audit Trail**: Detailed logging at each step
+6. **Flexible Service Integration**: Easy addition of new service types
+7. **User-Specific Delivery**: Proper handling of user service activations
+8. **Original Sender Protection**: Prevents message loops by skipping original sender
+
+### Database Tables Involved
+- Core Tables:
+  - `core_messages`: Standard message format
+  - `core_message_queue`: Individual delivery queue
+  - `core_user_services`: User service activations
+  - `core_services`: Service configurations
+  - `core_plugins`: Plugin definitions
+- Service-specific Tables:
+  - Incoming: `{plugin_name}_{instance.id}_in` (e.g., `imap_1_in`)
+  - Outgoing: `{plugin_name}_{instance.id}_out` (e.g., `smtp_1_out`)
+
+### Status Tracking
+- **Message States**:
+  - `new`: Initial state
+  - `processed`: Successfully processed
+  - `formatted`: Ready for distribution
+  - `queued`: Ready for sending
+  - `sent`: Successfully delivered
+  - `failed`: Delivery failed
+- **Retry Tracking**:
+  - `retry_count`: Number of attempts
+  - `last_retry_at`: Timestamp of last attempt
+  - Exponential backoff between retries
+
+### Audit Logging
+- **Event Types**:
+  - `incoming_poll`: Step 1 operations
+  - `incoming_process`: Step 2 operations
+  - `outgoing_process`: Step 3 operations
+  - `outgoing_queue`: Step 4 operations
+  - `outgoing_send`: Step 5 operations
+  - `error`: Error conditions
+  - `warning`: Warning conditions
+- **Log Format**: Consistent prefixing with step number and detailed context
 
 # Get all active outgoing services
 outgoing_services = Service.objects.filter(

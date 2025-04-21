@@ -155,8 +155,8 @@ CELERY_TIMEZONE = 'UTC'
 
 # Celery Beat Configuration
 CELERY_BEAT_SCHEDULE = {
-    'poll-imap-services': {
-        'task': 'core.tasks.poll_imap_services',
+    'poll-incoming-services': {
+        'task': 'core.tasks.poll_incoming_services',
         'schedule': 30.0,  # Run every 30 seconds
     },
     'process-incoming-messages': {
@@ -187,3 +187,8 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
 }
+
+# Message Processing Settings
+MAX_MESSAGE_RETRIES = 5  # Maximum number of retry attempts for failed messages
+MIN_RETRY_DELAY = 2  # Minimum delay between retries in minutes
+MAX_RETRY_DELAY = 32  # Maximum delay between retries in minutes

@@ -139,7 +139,7 @@ class Plugin(models.Model):
 
             # Create a unique model name and table name
             model_name = f"{self.name}{direction.capitalize()}Message_{service_instance.id}"
-            table_name = f"{self.name}_{direction}_{service_instance.id}"
+            table_name = f"{self.name}_{service_instance.id}_{direction[:1]}"  # e.g., imap_1_in
 
             # Check if the model is already registered
             try:
@@ -207,67 +207,100 @@ class Service(models.Model):
 def create_message_tables(sender, instance, created, **kwargs):
     """
     Creates dynamic tables for storing messages when a service is created.
+    Only creates tables if the service is newly created (created=True).
     """
+    if not created:
+        return  # Only create tables for new services
+
     try:
+        logger.info(f"Creating message tables for service {instance.name} (ID: {instance.id})")
         manifest = instance.plugin.get_manifest()
-        if manifest and 'message_schemas' in manifest:
-            # Create incoming table if plugin supports incoming
-            if manifest.get('incoming', False):
-                incoming_schema = manifest['message_schemas'].get('incoming', {})
-                if incoming_schema:
-                    model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_{instance.id}_in"
-                    logger.info(f"Creating incoming message table {table_name}")
-                    
-                    # Drop existing table if it exists
-                    with connection.cursor() as cursor:
-                        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-                        logger.info(f"Dropped existing table {table_name}")
-                    
-                    # Add source_message_id field with unique constraint if not present
-                    if 'source_message_id' not in incoming_schema:
-                        incoming_schema['source_message_id'] = {
-                            'type': 'CharField',
-                            'max_length': 255,
-                            'unique': True,
-                            'required': True,
-                            'help_text': 'Original message ID from the source system, used for troubleshooting'
-                        }
-                    else:
-                        incoming_schema['source_message_id']['unique'] = True
-                    
-                    # Create new table
-                    create_dynamic_model(model_name, incoming_schema, table_name, app_label='core')
-                    logger.info(f"Created new table {table_name}")
-            
-            # Create outgoing table if plugin supports outgoing
-            if manifest.get('outgoing', False):
-                outgoing_schema = manifest['message_schemas'].get('outgoing', {})
-                if outgoing_schema:
-                    model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_{instance.id}_out"
-                    logger.info(f"Creating outgoing message table {table_name}")
-                    
-                    # Drop existing table if it exists
-                    with connection.cursor() as cursor:
-                        cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-                        logger.info(f"Dropped existing table {table_name}")
-                    
-                    # Add raingull_id field with unique constraint if not present
-                    if 'raingull_id' not in outgoing_schema:
-                        outgoing_schema['raingull_id'] = {
-                            'type': 'UUIDField',
-                            'unique': True,
-                            'required': True,
-                            'help_text': 'Unique identifier for the message in Raingull system'
-                        }
-                    else:
-                        outgoing_schema['raingull_id']['unique'] = True
-                    
-                    # Create new table
-                    create_dynamic_model(model_name, outgoing_schema, table_name, app_label='core')
-                    logger.info(f"Created new table {table_name}")
-                    
+        if not manifest:
+            logger.error(f"No manifest found for plugin {instance.plugin.name}")
+            return
+
+        if 'message_schemas' not in manifest:
+            logger.error(f"No message schemas found in manifest for plugin {instance.plugin.name}")
+            return
+
+        def transform_field_definition(field_def):
+            """Transform manifest field definition into Django field parameters."""
+            transformed = field_def.copy()
+            if 'required' in transformed:
+                required = transformed.pop('required')
+                transformed['null'] = not required
+                transformed['blank'] = not required
+            return transformed
+
+        # Create incoming table if plugin supports incoming
+        if manifest.get('incoming', False):
+            incoming_schema = manifest['message_schemas'].get('incoming', {})
+            if incoming_schema:
+                model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
+                table_name = f"{instance.plugin.name}_{instance.id}_in"  # e.g., imap_1_in
+                logger.info(f"Creating incoming message table {table_name}")
+                
+                # Transform all field definitions
+                transformed_schema = {
+                    field_name: transform_field_definition(field_def)
+                    for field_name, field_def in incoming_schema.items()
+                }
+                
+                # Add source_message_id field with unique constraint if not present
+                if 'source_message_id' not in transformed_schema:
+                    transformed_schema['source_message_id'] = {
+                        'type': 'CharField',
+                        'max_length': 255,
+                        'unique': True,
+                        'null': False,
+                        'blank': False,
+                        'help_text': 'Original message ID from the source system, used for troubleshooting'
+                    }
+                else:
+                    transformed_schema['source_message_id'].update({
+                        'unique': True,
+                        'null': False,
+                        'blank': False
+                    })
+                
+                # Create new table
+                create_dynamic_model(model_name, transformed_schema, table_name, app_label='core')
+                logger.info(f"Created new table {table_name}")
+        
+        # Create outgoing table if plugin supports outgoing
+        if manifest.get('outgoing', False):
+            outgoing_schema = manifest['message_schemas'].get('outgoing', {})
+            if outgoing_schema:
+                model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
+                table_name = f"{instance.plugin.name}_{instance.id}_out"  # e.g., imap_1_out
+                logger.info(f"Creating outgoing message table {table_name}")
+                
+                # Transform all field definitions
+                transformed_schema = {
+                    field_name: transform_field_definition(field_def)
+                    for field_name, field_def in outgoing_schema.items()
+                }
+                
+                # Add raingull_id field with unique constraint if not present
+                if 'raingull_id' not in transformed_schema:
+                    transformed_schema['raingull_id'] = {
+                        'type': 'UUIDField',
+                        'unique': True,
+                        'null': False,
+                        'blank': False,
+                        'help_text': 'Unique identifier for the message in Raingull system'
+                    }
+                else:
+                    transformed_schema['raingull_id'].update({
+                        'unique': True,
+                        'null': False,
+                        'blank': False
+                    })
+                
+                # Create new table
+                create_dynamic_model(model_name, transformed_schema, table_name, app_label='core')
+                logger.info(f"Created new table {table_name}")
+                
     except Exception as e:
         logger.error(f"Error creating message tables for {instance.name}: {str(e)}")
         raise
@@ -278,27 +311,33 @@ def delete_message_tables(sender, instance, **kwargs):
     Deletes the dynamic tables when the service is deleted.
     """
     try:
+        logger.info(f"Deleting message tables for service {instance.name} (ID: {instance.id})")
         manifest = instance.plugin.get_manifest()
-        if manifest and 'message_schemas' in manifest:
-            # Delete incoming table if plugin supports incoming
-            if manifest.get('incoming', False):
-                incoming_schema = manifest['message_schemas'].get('incoming', {})
-                if incoming_schema:
-                    model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_{instance.id}_in"
-                    logger.info(f"Deleting incoming message table {table_name}")
-                    delete_dynamic_model(model_name, table_name)
+        if not manifest:
+            logger.error(f"No manifest found for plugin {instance.plugin.name}")
+            return
+
+        if 'message_schemas' not in manifest:
+            logger.error(f"No message schemas found in manifest for plugin {instance.plugin.name}")
+            return
+
+        # Delete incoming table if plugin supports incoming
+        if manifest.get('incoming', False):
+            model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
+            table_name = f"{instance.plugin.name}_{instance.id}_in"
+            logger.info(f"Deleting incoming message table {table_name}")
+            delete_dynamic_model(model_name, table_name)
+        
+        # Delete outgoing table if plugin supports outgoing
+        if manifest.get('outgoing', False):
+            model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
+            table_name = f"{instance.plugin.name}_{instance.id}_out"
+            logger.info(f"Deleting outgoing message table {table_name}")
+            delete_dynamic_model(model_name, table_name)
             
-            # Delete outgoing table if plugin supports outgoing
-            if manifest.get('outgoing', False):
-                outgoing_schema = manifest['message_schemas'].get('outgoing', {})
-                if outgoing_schema:
-                    model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
-                    table_name = f"{instance.plugin.name}_{instance.id}_out"
-                    logger.info(f"Deleting outgoing message table {table_name}")
-                    delete_dynamic_model(model_name, table_name)
     except Exception as e:
-        logger.error(f"Error deleting message tables for {instance.name}: {e}")
+        logger.error(f"Error deleting message tables for {instance.name}: {str(e)}")
+        raise
 
 @receiver(pre_delete, sender=Service)
 def pre_delete_service_instance(sender, instance, **kwargs):
@@ -373,35 +412,65 @@ class UserService(models.Model):
         return f"{self.user.username} - {self.service_instance.name}"
 
 class MessageQueue(models.Model):
-    STATUS_CHOICES = [
-        ('queued', 'Queued'),
-        ('processing', 'Processing'),
-        ('sent', 'Sent'),
-        ('failed', 'Failed')
-    ]
-    
-    # Foreign key to the original message - allows direct access to message data
-    raingull_message = models.ForeignKey('Message', on_delete=models.CASCADE)
-    
-    # The tracking ID that follows the message through its lifecycle
-    # This is the same value as raingull_message.raingull_id
-    raingull_id = models.UUIDField()
-    
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    service_instance = models.ForeignKey('Service', on_delete=models.CASCADE)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='queued')
-    source_message_id = models.CharField(max_length=255, null=True, blank=True)  # Original service's message ID
-    created_at = models.DateTimeField(auto_now_add=True)
-    processed_at = models.DateTimeField(null=True)
-    error_message = models.TextField(null=True, blank=True)
-    
+    """
+    Queue for messages to be sent to specific users.
+    """
+    raingull_message = models.ForeignKey(
+        'Message',
+        on_delete=models.CASCADE,
+        related_name='queue_entries'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='message_queue'
+    )
+    service_instance = models.ForeignKey(
+        'Service',
+        on_delete=models.CASCADE,
+        related_name='message_queue'
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('queued', 'Queued'),
+            ('sent', 'Sent'),
+            ('failed', 'Failed')
+        ],
+        default='queued'
+    )
+    error_message = models.TextField(
+        null=True,
+        blank=True
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+    processed_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+    retry_count = models.IntegerField(
+        default=0,
+        help_text="Number of times this message has been retried"
+    )
+    last_retry_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of the last retry attempt"
+    )
+
     class Meta:
-        indexes = [
-            models.Index(fields=['status', 'created_at']),
-            models.Index(fields=['user', 'service_instance']),
-            models.Index(fields=['raingull_id']),  # Add index for raingull_id
-        ]
         db_table = 'core_message_queue'
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['created_at']),
+            models.Index(fields=['retry_count']),
+            models.Index(fields=['last_retry_at'])
+        ]
+
+    def __str__(self):
+        return f"Queue entry for {self.user.username} - {self.raingull_message.raingull_id}"
 
 class AuditLog(models.Model):
     EVENT_TYPE_CHOICES = [
@@ -496,26 +565,41 @@ class SystemMessageTemplate(models.Model):
 
 class MessageDistribution(models.Model):
     """
-    Tracks the distribution of messages to outgoing services.
-    Ensures each service gets exactly one copy of each message.
+    Tracks the distribution of messages to service-specific outgoing tables.
+    This is Step 3 in the message processing pipeline.
     """
-    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='distributions')
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='message_distributions')
-    status = models.CharField(max_length=20, choices=[
-        ('pending', 'Pending'),
-        ('formatted', 'Formatted'),
-        ('failed', 'Failed')
-    ])
-    error_message = models.TextField(blank=True, null=True)
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),      # Initial state
+        ('formatted', 'Formatted'),  # Successfully translated and stored in service table
+        ('failed', 'Failed'),       # Translation or storage failed
+    ]
+    
+    message = models.ForeignKey('Message', on_delete=models.CASCADE)
+    service_instance = models.ForeignKey('Service', on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    error_message = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    
     class Meta:
-        unique_together = ('message', 'service')
+        db_table = 'core_message_distribution'
         indexes = [
-            models.Index(fields=['message', 'service']),
             models.Index(fields=['status']),
+            models.Index(fields=['message', 'service_instance'], name='message_service_idx'),
+            models.Index(fields=['created_at']),
         ]
-
+        unique_together = [['message', 'service_instance']]  # Prevent duplicate distributions
+        
     def __str__(self):
-        return f"{self.message.raingull_id} -> {self.service.name} ({self.status})"
+        return f"{self.message.raingull_id} -> {self.service_instance.name} ({self.status})"
+        
+    def save(self, *args, **kwargs):
+        # Log status changes
+        if self.pk:  # If this is an update
+            old_status = MessageDistribution.objects.get(pk=self.pk).status
+            if old_status != self.status:
+                logger.info(
+                    f"Step 3: Message {self.message.raingull_id} distribution status changed from {old_status} to {self.status} "
+                    f"for service {self.service_instance.name}"
+                )
+        super().save(*args, **kwargs)

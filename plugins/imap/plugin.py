@@ -104,36 +104,54 @@ class Plugin:
 
     def retrieve_messages(self, service_instance):
         """Retrieve messages from the IMAP inbox."""
+        mail = None
         try:
             # Get service configuration
             config = self.get_service_config(service_instance)
-            user_config = self.get_user_config(service_instance)
+            if not config:
+                logger.error(f"Step 1: Could not get service configuration for {service_instance.name}")
+                return None
 
             # Connect to IMAP server
-            if config['encryption'] == 'SSL/TLS':
-                mail = imaplib.IMAP4_SSL(config['imap_server'], config['imap_port'])
-            else:
-                mail = imaplib.IMAP4(config['imap_server'], config['imap_port'])
-                if config['encryption'] == 'STARTTLS':
-                    mail.starttls()
+            try:
+                if config['encryption'] == 'SSL/TLS':
+                    mail = imaplib.IMAP4_SSL(config['imap_server'], config['imap_port'])
+                else:
+                    mail = imaplib.IMAP4(config['imap_server'], config['imap_port'])
+                    if config['encryption'] == 'STARTTLS':
+                        mail.starttls()
+            except Exception as e:
+                logger.error(f"Step 1: Error connecting to IMAP server for {service_instance.name}: {str(e)}")
+                return None
 
             # Login
-            mail.login(config['username'], config['password'])
+            try:
+                mail.login(config['username'], config['password'])
+            except Exception as e:
+                logger.error(f"Step 1: Error logging in to IMAP server for {service_instance.name}: {str(e)}")
+                return None
 
             # Select inbox folder
             inbox_folder = config.get('inbox_folder', 'INBOX')
             processed_folder = config.get('processed_folder', 'Processed')
-            mail.select(inbox_folder)
+            try:
+                mail.select(inbox_folder)
+            except Exception as e:
+                logger.error(f"Step 1: Error selecting IMAP folder for {service_instance.name}: {str(e)}")
+                return None
 
             # Search for all messages
-            _, message_numbers = mail.search(None, 'ALL')
-            message_numbers = message_numbers[0].split()
+            try:
+                _, message_numbers = mail.search(None, 'ALL')
+                message_numbers = message_numbers[0].split()
+            except Exception as e:
+                logger.error(f"Step 1: Error searching IMAP messages for {service_instance.name}: {str(e)}")
+                return None
 
             # Get the incoming model for this service instance
             incoming_model = self.get_incoming_model(service_instance)
             if not incoming_model:
-                logger.error(f"Could not get incoming model for service {service_instance.id}")
-                mail.logout()
+                logger.error(f"Step 1: Could not get incoming model for {service_instance.name}")
                 return None
 
             stored_count = 0
@@ -144,21 +162,22 @@ class Plugin:
                     # Fetch the message
                     _, msg_data = mail.fetch(num, '(RFC822)')
                     msg = email.message_from_bytes(msg_data[0][1])
-                    message_id = msg.get('Message-ID', '')
-
+                    
+                    # Get message ID
+                    message_id = msg.get('Message-ID', str(uuid.uuid4()))
+                    
                     # Get message body
-                    body = ''
+                    body = ""
                     if msg.is_multipart():
                         for part in msg.walk():
-                            if part.get_content_type() == 'text/plain':
+                            if part.get_content_type() == "text/plain":
                                 body = part.get_payload(decode=True).decode()
                                 break
                     else:
                         body = msg.get_payload(decode=True).decode()
 
-                    # Store in database if we have a model
+                    # Create message with fields from schema
                     try:
-                        # Create a new message record with fields from schema
                         message = incoming_model(
                             raingull_id=uuid.uuid4(),  # Generate a new UUID for Raingull's tracking
                             source_message_id=message_id,  # Store the IMAP message ID
@@ -172,29 +191,36 @@ class Plugin:
                         )
                         message.save()
                         stored_count += 1
-                        logger.info(f"Stored message {message_id} in database")
-                    except Exception as e:
-                        logger.error(f"Error storing message {message_id} in database: {str(e)}")
-                        continue
+                        logger.info(f"Step 1: Stored message {message_id} in database for {service_instance.name}")
 
-                    # Move the message to processed folder
-                    try:
-                        mail.copy(num, processed_folder)
-                        mail.store(num, '+FLAGS', '\\Deleted')
-                        processed_count += 1
-                        logger.info(f"Moved message {message_id} to processed folder")
+                        # Only move to processed folder if storage was successful
+                        try:
+                            mail.copy(num, processed_folder)
+                            mail.store(num, '+FLAGS', '\\Deleted')
+                            processed_count += 1
+                            logger.info(f"Step 1: Moved message {message_id} to processed folder for {service_instance.name}")
+                        except Exception as e:
+                            logger.error(f"Step 1: Error moving message {message_id} to processed folder for {service_instance.name}: {str(e)}")
+                            # Don't continue here - we want to try the next message even if moving fails
                     except Exception as e:
-                        logger.error(f"Error moving message {message_id} to processed folder: {str(e)}")
+                        logger.error(f"Step 1: Error storing message {message_id} in database for {service_instance.name}: {str(e)}")
                         continue
 
                 except Exception as e:
-                    logger.error(f"Error processing message: {str(e)}")
+                    logger.error(f"Step 1: Error processing message for {service_instance.name}: {str(e)}")
                     continue
 
             # Expunge deleted messages
-            mail.expunge()
-            mail.close()
-            mail.logout()
+            try:
+                mail.expunge()
+                mail.close()
+            except Exception as e:
+                logger.error(f"Step 1: Error expunging messages for {service_instance.name}: {str(e)}")
+            finally:
+                try:
+                    mail.logout()
+                except:
+                    pass
 
             return {
                 'stored': stored_count,
@@ -202,11 +228,12 @@ class Plugin:
             }
 
         except Exception as e:
-            logger.error(f"Error retrieving messages: {str(e)}")
-            try:
-                mail.logout()
-            except:
-                pass
+            logger.error(f"Step 1: Error retrieving messages for {service_instance.name}: {str(e)}")
+            if mail:
+                try:
+                    mail.logout()
+                except:
+                    pass
             return None
 
     def connect(self):
