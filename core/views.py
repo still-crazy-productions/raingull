@@ -356,7 +356,7 @@ def test_translate_messages(request, instance_id):
         for msg in messages:
             print(f"\nMessage ID: {msg.id}")
             print(f"Subject: {msg.subject}")
-            print(f"From: {msg.email_from}")
+            print(f"From: {msg.sender}")
             print(f"Date: {msg.date}")
             print(f"Status: {msg.status}")
             print(f"Body length: {len(msg.body) if msg.body else 0}")
@@ -369,57 +369,42 @@ def test_translate_messages(request, instance_id):
         # Get the Raingull standard message model
         from email.utils import parsedate_to_datetime
         
-        for message in messages:
+        for msg in messages:
             try:
-                print(f"\nAttempting to translate message {message.id}:")
-                print(f"Subject: {message.subject}")
-                
-                # Parse the IMAP date string
-                received_at = parsedate_to_datetime(message.date)
-                print(f"Parsed date: {received_at}")
-                
                 # Create a new Raingull standard message
                 standard_message = Message.create_standard_message(
-                    raingull_id=message.raingull_id,  # Copy the raingull_id from the source message
+                    raingull_id=msg.raingull_id,
                     source_service=service_instance,
-                    source_message_id=message.imap_message_id,
-                    subject=message.subject,
-                    body=message.body,
-                    sender=message.email_from,
-                    recipients=message.to,  # Already a list, no need to convert to JSON
-                    date=received_at,
-                    headers=message.headers if hasattr(message, 'headers') else {}
+                    source_message_id=msg.source_message_id,
+                    subject=msg.subject,
+                    body=msg.body,
+                    sender=msg.sender,
+                    recipients=msg.recipients,
+                    date=parsedate_to_datetime(msg.date),
+                    headers=msg.headers if hasattr(msg, 'headers') else {}
                 )
-                print(f"Successfully created standard message with raingull_id: {standard_message.raingull_id}")
                 
                 # Mark the original message as processed
-                message.status = 'processed'
-                message.processed_at = timezone.now()
-                message.save()
-                print(f"Marked original message as processed")
+                msg.status = 'processed'
+                msg.processed_at = timezone.now()
+                msg.save()
                 
                 translated_count += 1
                 
             except Exception as e:
-                print(f"Error translating message {message.id}: {str(e)}")
-                print(f"Error type: {type(e)}")
-                import traceback
-                print(f"Traceback: {traceback.format_exc()}")
+                print(f"Error translating message {msg.id}: {str(e)}")
                 continue
         
         return JsonResponse({
             "success": True,
-            "message": f"Found {message_count} messages, translated {translated_count} to Raingull standard format"
+            "message": f"Successfully translated {translated_count} of {message_count} messages"
         })
         
-    except Service.DoesNotExist:
-        return JsonResponse({"success": False, "message": "Service instance not found"})
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        print(f"Error type: {type(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        return JsonResponse({"success": False, "message": str(e)})
+        return JsonResponse({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        })
 
 @login_required
 def test_smtp_send(request, instance_id):

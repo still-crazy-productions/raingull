@@ -1,6 +1,6 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import Service, Message, AuditLog, MessageQueue, UserService
+from .models import Service, Message, AuditLog, MessageQueue, UserService, MessageDistribution
 from django.core.mail import send_mail
 from django.conf import settings
 from core.utils import get_imap_connection, get_smtp_connection
@@ -17,6 +17,7 @@ import json
 from email.utils import parsedate_to_datetime
 from redis import Redis
 from redis.lock import Lock
+import uuid
 
 logger = logging.getLogger(__name__)
 redis_client = Redis(host='localhost', port=6379, db=0)
@@ -85,8 +86,8 @@ def poll_imap_services():
                 
                 # Poll for new messages
                 result = plugin.retrieve_messages(service)
-                if not result.get('success'):
-                    error_msg = f"Step 1: Error retrieving messages: {result.get('message')}"
+                if result is None:
+                    error_msg = f"Step 1: Error retrieving messages: None"
                     logger.error(error_msg)
                     log_audit('error', error_msg, service)
                     continue
@@ -94,34 +95,26 @@ def poll_imap_services():
                 # Log polling results
                 log_audit(
                     'imap_poll',
-                    f"Step 1: {result.get('message', 'Messages retrieved successfully')}",
+                    f"Step 1: Retrieved {result.get('stored', 0)} messages, processed {result.get('processed', 0)} messages",
                     service
                 )
                 
             except Exception as e:
-                error_msg = f"Step 1: Error polling IMAP service {service.name}: {e}"
+                error_msg = f"Step 1: Error polling IMAP service {service.name}: {str(e)}"
                 logger.error(error_msg)
                 log_audit('error', error_msg, service)
-                continue
             finally:
-                # Always try to release the lock if we acquired it
-                if lock and lock.locked():
+                if lock:
                     try:
                         lock.release()
                     except Exception as e:
                         logger.error(f"Error releasing lock for {service.name}: {e}")
-                        # Try to force release the lock
-                        try:
-                            redis_client.delete(lock_key)
-                            redis_client.delete(f"{lock_key}:owner")
-                        except Exception as e:
-                            logger.error(f"Error force releasing lock for {service.name}: {e}")
-                
+        
+        return None
+        
     except Exception as e:
-        error_msg = f"Step 1: Error in poll_imap_services task: {str(e)}"
-        logger.error(error_msg)
-        log_audit('error', error_msg)
-        raise
+        logger.error(f"Error in poll_imap_services: {str(e)}")
+        return None
 
 @shared_task
 def process_outgoing_messages():
@@ -282,7 +275,7 @@ def process_incoming_messages():
     """
     Process and translate incoming messages from all service instances.
     This task:
-    1. Checks all incoming service instance tables for new messages
+    1. Checks all incoming service instances for new messages
     2. Translates them based on the plugin manifest
     3. Stores them in the standard Message table
     """
@@ -326,7 +319,6 @@ def process_incoming_messages():
                     # Create a unique lock key for this message
                     lock_key = f"process_message:{instance.id}:{message.raingull_id}"
                     
-                    # Try to acquire a lock for this message
                     lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
                     try:
                         if lock.acquire():
@@ -342,11 +334,11 @@ def process_incoming_messages():
                             standard_message = Message.create_standard_message(
                                 raingull_id=message.raingull_id,
                                 source_service=instance,
-                                source_message_id=message.imap_message_id,
+                                source_message_id=message.source_message_id,
                                 subject=message.subject,
                                 body=message.body,
-                                sender=message.email_from,
-                                recipients=message.to,
+                                sender=message.sender,
+                                recipients=message.recipients,
                                 date=parsedate_to_datetime(message.date),
                                 headers=message.headers if hasattr(message, 'headers') else {}
                             )
@@ -455,4 +447,187 @@ def process_service_messages():
                 
     except Exception as e:
         logger.error(f"Error in process_service_messages: {e}")
-        log_audit('error', f"Error in process_service_messages: {e}") 
+        log_audit('error', f"Error in process_service_messages: {e}")
+
+@shared_task
+def format_outgoing_messages():
+    """
+    Step 3: Format messages for each outgoing service.
+    This task:
+    1. Gets all unprocessed messages from core_messages
+    2. For each active outgoing service:
+       - Creates a distribution record if one doesn't exist
+       - Translates the message using the service's manifest
+       - Stores the formatted message in the service's outgoing table
+    3. Marks the original message as processed when all services have their copies
+    """
+    try:
+        # Get all active outgoing services
+        outgoing_services = Service.objects.filter(
+            outgoing_enabled=True
+        )
+        
+        # Get unprocessed messages
+        unprocessed_messages = Message.objects.filter(
+            processed=False
+        )
+        
+        total_formatted = 0
+        for message in unprocessed_messages:
+            # Create distribution records for all active services if they don't exist
+            for service in outgoing_services:
+                MessageDistribution.objects.get_or_create(
+                    message=message,
+                    service=service,
+                    defaults={'status': 'pending'}
+                )
+            
+            # Get all pending distributions for this message
+            distributions = MessageDistribution.objects.filter(
+                message=message,
+                status='pending'
+            ).select_related('service')
+            
+            for distribution in distributions:
+                service = distribution.service
+                try:
+                    # Get the plugin instance
+                    plugin = service.get_plugin_instance()
+                    if not plugin:
+                        logger.error(f"Step 3: Could not get plugin instance for {service.name}")
+                        distribution.status = 'failed'
+                        distribution.error_message = "Could not get plugin instance"
+                        distribution.save()
+                        continue
+                    
+                    # Get the outgoing message model
+                    outgoing_model = service.get_message_model('outgoing')
+                    if not outgoing_model:
+                        logger.error(f"Step 3: Could not get outgoing message model for {service.name}")
+                        distribution.status = 'failed'
+                        distribution.error_message = "Could not get outgoing message model"
+                        distribution.save()
+                        continue
+                    
+                    # Create a unique lock key for this message and service
+                    lock_key = f"format_message:{service.id}:{message.raingull_id}"
+                    
+                    # Try to acquire a lock for this message and service
+                    lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
+                    try:
+                        if lock.acquire():
+                            # Check if message was already formatted for this service
+                            if outgoing_model.objects.filter(raingull_id=message.raingull_id).exists():
+                                distribution.status = 'formatted'
+                                distribution.save()
+                                continue
+                            
+                            # Format the message according to the service's schema
+                            formatted_message = outgoing_model(
+                                raingull_id=message.raingull_id,
+                                message_id=str(uuid.uuid4()),  # Generate a new message ID for this service
+                                to=message.recipients.get('to', ''),
+                                subject=message.subject,
+                                body=message.body,
+                                headers=message.headers,
+                                status='formatted'
+                            )
+                            formatted_message.save()
+                            
+                            distribution.status = 'formatted'
+                            distribution.save()
+                            total_formatted += 1
+                            
+                        else:
+                            logger.warning(f"Could not acquire lock for message {message.raingull_id} and service {service.name}, skipping")
+                            continue
+                            
+                    except Exception as e:
+                        error_msg = f"Step 3: Error formatting message for {service.name}: {str(e)}"
+                        logger.error(error_msg)
+                        distribution.status = 'failed'
+                        distribution.error_message = str(e)
+                        distribution.save()
+                        continue
+                    finally:
+                        if lock.locked():
+                            lock.release()
+                            
+                except Exception as e:
+                    error_msg = f"Step 3: Error processing message for {service.name}: {str(e)}"
+                    logger.error(error_msg)
+                    distribution.status = 'failed'
+                    distribution.error_message = str(e)
+                    distribution.save()
+                    continue
+            
+            # Check if all services have received their copies
+            if not MessageDistribution.objects.filter(
+                message=message,
+                status__in=['pending', 'failed']
+            ).exists():
+                message.processed = True
+                message.save()
+                logger.info(f"Step 3: All services have received their copies of message {message.raingull_id}")
+        
+        logger.info(f"Step 3: Formatted {total_formatted} outgoing messages")
+        return f"Successfully formatted {total_formatted} messages"
+        
+    except Exception as e:
+        error_msg = f"Step 3: Error in format_outgoing_messages task: {str(e)}"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
+        raise
+
+@shared_task
+def distribute_messages():
+    """
+    Step 4: Distribute formatted messages to their respective services.
+    """
+    logger.info("Starting message distribution")
+    
+    # Get all active outgoing services
+    services = Service.objects.filter(
+        is_active=True,
+        direction='outgoing'
+    ).select_related('plugin')
+    
+    # Get all formatted messages
+    messages = Message.objects.filter(
+        status='formatted',
+        service__in=services
+    ).select_related('service')
+    
+    total_messages = messages.count()
+    logger.info(f"Found {total_messages} messages to distribute")
+    
+    for message in messages:
+        try:
+            # Get plugin instance
+            plugin = message.service.plugin.get_plugin_instance()
+            if not plugin:
+                logger.error(f"Could not get plugin instance for service {message.service.id}")
+                continue
+                
+            # Try to acquire lock
+            lock_id = f"distribute_message_{message.id}"
+            if not acquire_lock(lock_id):
+                logger.warning(f"Could not acquire lock for message {message.id}")
+                continue
+                
+            try:
+                # Send message
+                plugin.send_message(message)
+                logger.info(f"Successfully distributed message {message.id}")
+                
+            finally:
+                release_lock(lock_id)
+                
+        except Exception as e:
+            logger.error(f"Error distributing message {message.id}: {e}")
+            message.status = 'failed'
+            message.error_message = str(e)
+            message.save()
+            
+    logger.info(f"Completed distribution of {total_messages} messages")
+    return f"Distributed {total_messages} messages" 

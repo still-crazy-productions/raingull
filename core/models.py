@@ -111,6 +111,18 @@ class Plugin(models.Model):
             logger.error(f"Error creating plugin instance for {self.name}: {e}")
             return None
 
+    def get_service_config(self, service_instance):
+        """Get the service configuration for a plugin instance."""
+        if not service_instance:
+            raise ValueError("Service instance is required")
+        return service_instance.config
+
+    def get_user_config(self, service_instance):
+        """Get the user configuration for a plugin instance."""
+        if not service_instance:
+            raise ValueError("Service instance is required")
+        return service_instance.app_config
+
     def get_message_model(self, service_instance, direction='incoming'):
         """Get the dynamic message model for this plugin and service instance"""
         try:
@@ -212,17 +224,17 @@ def create_message_tables(sender, instance, created, **kwargs):
                         cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
                         logger.info(f"Dropped existing table {table_name}")
                     
-                    # Add message_id field with unique constraint if not present
-                    if 'message_id' not in incoming_schema:
-                        incoming_schema['message_id'] = {
+                    # Add source_message_id field with unique constraint if not present
+                    if 'source_message_id' not in incoming_schema:
+                        incoming_schema['source_message_id'] = {
                             'type': 'CharField',
                             'max_length': 255,
                             'unique': True,
                             'required': True,
-                            'help_text': 'Unique identifier for the message'
+                            'help_text': 'Original message ID from the source system, used for troubleshooting'
                         }
                     else:
-                        incoming_schema['message_id']['unique'] = True
+                        incoming_schema['source_message_id']['unique'] = True
                     
                     # Create new table
                     create_dynamic_model(model_name, incoming_schema, table_name, app_label='core')
@@ -309,7 +321,7 @@ class Message(models.Model):
     subject = models.CharField(max_length=255)
     body = models.TextField()
     snippet = models.CharField(max_length=200, blank=True)  # First 200 chars of body
-    sender_email = models.CharField(max_length=255)
+    sender = models.CharField(max_length=255)
     recipients = models.JSONField()
     date = models.DateTimeField()
     headers = models.JSONField(null=True, blank=True)
@@ -324,10 +336,10 @@ class Message(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.subject} ({self.sender_email})"
+        return f"{self.subject} ({self.sender})"
 
     @classmethod
-    def create_standard_message(cls, source_service, source_message_id, subject, body, sender_email, recipients, date, headers, raingull_id):
+    def create_standard_message(cls, source_service, source_message_id, subject, body, sender, recipients, date, headers, raingull_id):
         """Create a new standard message."""
         # Create snippet from first 200 chars of body
         snippet = body[:200].strip()
@@ -339,7 +351,7 @@ class Message(models.Model):
             subject=subject,
             body=body,
             snippet=snippet,
-            sender_email=sender_email,
+            sender=sender,
             recipients=recipients,
             date=date,
             headers=headers
@@ -378,7 +390,7 @@ class MessageQueue(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     service_instance = models.ForeignKey('Service', on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='queued')
-    service_message_id = models.CharField(max_length=255, null=True, blank=True)  # Original service's message ID (e.g., IMAP message ID)
+    source_message_id = models.CharField(max_length=255, null=True, blank=True)  # Original service's message ID
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True)
     error_message = models.TextField(null=True, blank=True)
@@ -481,3 +493,29 @@ class SystemMessageTemplate(models.Model):
         for key, value in kwargs.items():
             message = message.replace(f"{{{key}}}", str(value))
         return message
+
+class MessageDistribution(models.Model):
+    """
+    Tracks the distribution of messages to outgoing services.
+    Ensures each service gets exactly one copy of each message.
+    """
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='distributions')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='message_distributions')
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('formatted', 'Formatted'),
+        ('failed', 'Failed')
+    ])
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('message', 'service')
+        indexes = [
+            models.Index(fields=['message', 'service']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.message.raingull_id} -> {self.service.name} ({self.status})"

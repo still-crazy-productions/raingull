@@ -42,47 +42,69 @@ class Plugin:
             logger.error(f"Error translating message {raingull_message.raingull_id}: {str(e)}")
             raise
 
-    def send_message(self, service_instance, message_data):
-        """
-        Send an email message using the configured SMTP server
-        """
-        config = self.get_config(service_instance)
-        
+    def send_message(self, message):
+        """Send a message using SMTP."""
         try:
+            # Update message status to sending
+            message.status = 'sending'
+            message.save()
+
+            # Get service configuration
+            config = self.get_service_config(message.service)
+            user_config = self.get_user_config(message.service)
+
+            # Connect to SMTP server
+            if config['encryption'] == 'SSL/TLS':
+                server = smtplib.SMTP_SSL(config['smtp_server'], config['smtp_port'])
+            else:
+                server = smtplib.SMTP(config['smtp_server'], config['smtp_port'])
+                if config['encryption'] == 'STARTTLS':
+                    server.starttls()
+
+            # Login
+            server.login(config['username'], config['password'])
+
             # Create message
             msg = MIMEMultipart()
-            msg['From'] = config.get('username')
-            msg['To'] = message_data.get('to')
-            msg['Subject'] = message_data.get('subject')
-            
+            msg['From'] = user_config['email_address']
+            msg['To'] = message.recipients.get('to', [])[0]  # Use first recipient as primary
+            msg['Subject'] = message.subject
+
+            # Add CC and BCC if present
+            if 'cc' in message.recipients:
+                msg['Cc'] = ', '.join(message.recipients['cc'])
+            if 'bcc' in message.recipients:
+                msg['Bcc'] = ', '.join(message.recipients['bcc'])
+
+            # Add any additional headers
+            if message.headers:
+                for key, value in message.headers.items():
+                    msg[key] = value
+
             # Add body
-            msg.attach(MIMEText(message_data.get('body', ''), 'plain'))
+            msg.attach(MIMEText(message.body, 'plain'))
+
+            # Send message
+            all_recipients = []
+            all_recipients.extend(message.recipients.get('to', []))
+            all_recipients.extend(message.recipients.get('cc', []))
+            all_recipients.extend(message.recipients.get('bcc', []))
             
-            # Connect to SMTP server
-            server = config['smtp_server']
-            port = int(config['smtp_port'])
-            encryption = config['encryption']
-            
-            if encryption == "SSL/TLS":
-                smtp_server = smtplib.SMTP_SSL(server, port)
-            else:
-                smtp_server = smtplib.SMTP(server, port)
-                if encryption == "STARTTLS":
-                    smtp_server.starttls()
-            
-            # Login and send
-            smtp_server.login(config['username'], config['password'])
-            smtp_server.send_message(msg)
-            smtp_server.quit()
-            
-            logger.info(f"Successfully sent email to {message_data.get('to')}")
-            return True
-            
-        except smtplib.SMTPException as e:
-            logger.error(f"SMTP error while sending email: {e}")
-            raise
+            server.send_message(msg)
+            server.quit()
+
+            # Update message status
+            message.status = 'sent'
+            message.sent_at = timezone.now()
+            message.save()
+
+            logger.info(f"Message {message.raingull_id} sent successfully via SMTP")
+
         except Exception as e:
-            logger.error(f"Error sending email: {e}")
+            logger.error(f"Error sending message {message.raingull_id}: {str(e)}")
+            message.status = 'failed'
+            message.error_message = str(e)
+            message.save()
             raise
 
     def test_connection(self, config):
