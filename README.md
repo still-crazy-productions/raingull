@@ -242,3 +242,79 @@ class MessageDistribution(models.Model):
     ])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True) 
+
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional
+from django.utils import timezone
+from core.models import Message, Service
+from core.plugin_base import BasePlugin
+import imaplib
+import email
+from email.utils import parsedate_to_datetime
+
+class Plugin(BasePlugin):
+    def get_manifest(self):
+        return {
+            "name": "imap",
+            "friendly_name": "IMAP Email",
+            "version": "1.0",
+            "description": "IMAP email integration",
+            "capabilities": {
+                "incoming": True,
+                "outgoing": False
+            },
+            "formatting": {
+                "header_template": "**{user} via Email says:**\n---\n",
+                "message_format": "markdown"
+            },
+            "config_schema": {
+                "host": {"type": "string", "required": True},
+                "port": {"type": "integer", "required": True},
+                "use_ssl": {"type": "boolean", "default": True}
+            }
+        }
+
+    def fetch_messages(self):
+        # Connect to IMAP server
+        imap = self._connect()
+        if not imap:
+            return []
+
+        messages = []
+        try:
+            # IMAP-specific message fetching logic
+            # Convert to Raingull format
+            for msg in raw_messages:
+                messages.append({
+                    'service_message_id': msg['message_id'],
+                    'subject': msg['subject'],
+                    'sender': msg['from'],
+                    'timestamp': parsedate_to_datetime(msg['date']),
+                    'payload': {
+                        'content': msg['body'],
+                        'attachments': msg.get('attachments', [])
+                    }
+                })
+        finally:
+            imap.logout()
+        return messages
+
+    def test_connection(self):
+        try:
+            imap = self._connect()
+            if imap:
+                imap.logout()
+                return True
+        except Exception as e:
+            logger.error(f"IMAP connection test failed: {e}")
+        return False
+
+    def _connect(self):
+        try:
+            imap = imaplib.IMAP4_SSL if self.config.get('use_ssl', True) else imaplib.IMAP4
+            connection = imap(self.config['host'], self.config['port'])
+            connection.login(self.config['username'], self.config['password'])
+            return connection
+        except Exception as e:
+            logger.error(f"IMAP connection failed: {e}")
+            return None 

@@ -1,7 +1,154 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Create Service Instance{% endblock %}
 
 {% block head %}
 {{ block.super }}
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <h1 class="text-2xl font-bold text-gray-900 mb-8">Create Service Instance</h1>
+
+    <form method="post" id="serviceForm" class="space-y-8">
+        {% csrf_token %}
+        
+        <div class="bg-white shadow rounded-lg">
+            <div class="px-6 py-8 sm:p-8">
+                <div class="grid grid-cols-1 gap-8">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Plugin</label>
+                        <input type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" value="{{ plugin.friendly_name }}" readonly>
+                        <input type="hidden" name="plugin" value="{{ plugin.name }}">
+                    </div>
+
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-gray-700 mb-2">Instance Name</label>
+                        <input type="text" id="name" name="name" required
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+
+                    {% for field in config_fields %}
+                        <div>
+                            <label for="config_{{ field.name }}" class="block text-sm font-medium text-gray-700 mb-2">
+                                {{ field.label }}
+                                {% if field.required %}<span class="text-red-500">*</span>{% endif %}
+                            </label>
+
+                            {% if field.type == 'string' or field.type == 'text' %}
+                                <input type="{{ field.type }}" 
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                       id="config_{{ field.name }}" 
+                                       name="config_{{ field.name }}" 
+                                       value="{{ field.value }}"
+                                       {% if field.required %}required{% endif %}>
+                            {% elif field.type == 'password' %}
+                                <div class="relative">
+                                    <input type="password" 
+                                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm pr-10"
+                                           id="config_{{ field.name }}" 
+                                           name="config_{{ field.name }}" 
+                                           value="{{ field.value }}"
+                                           {% if field.required %}required{% endif %}>
+                                    <button type="button" class="absolute inset-y-0 right-0 pr-3 flex items-center password-toggle">
+                                        <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                        </svg>
+                                        <svg class="h-5 w-5 text-gray-400 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            {% elif field.type == 'integer' or field.type == 'number' %}
+                                <input type="number" 
+                                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                       id="config_{{ field.name }}" 
+                                       name="config_{{ field.name }}" 
+                                       value="{{ field.value }}"
+                                       {% if field.required %}required{% endif %}>
+                            {% elif field.type == 'select' %}
+                                <select class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                        id="config_{{ field.name }}" 
+                                        name="config_{{ field.name }}" 
+                                        {% if field.required %}required{% endif %}>
+                                    {% if field.options.0.value %}
+                                        {% for option in field.options %}
+                                            <option value="{{ option.value }}" {% if field.value == option.value %}selected{% endif %}>
+                                                {{ option.label }}
+                                            </option>
+                                        {% endfor %}
+                                    {% else %}
+                                        {% for option in field.options %}
+                                            <option value="{{ option }}" {% if field.value == option %}selected{% endif %}>
+                                                {{ option }}
+                                            </option>
+                                        {% endfor %}
+                                    {% endif %}
+                                </select>
+                            {% endif %}
+                            {% if field.help_text %}
+                                <p class="mt-2 text-sm text-gray-500">{{ field.help_text }}</p>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+
+                    {% if manifest.capabilities.incoming or manifest.capabilities.incoming_messages %}
+                        <div class="flex items-center">
+                            <input type="checkbox" id="incoming_enabled" name="incoming_enabled" 
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                                   checked>
+                            <label for="incoming_enabled" class="ml-2 block text-sm text-gray-900">
+                                Enable Incoming Messages
+                            </label>
+                        </div>
+                    {% else %}
+                        <div class="flex items-center text-gray-500">
+                            <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span class="text-sm">Incoming Messages: Not Available</span>
+                        </div>
+                    {% endif %}
+
+                    {% if manifest.capabilities.outgoing or manifest.capabilities.outgoing_messages %}
+                        <div class="flex items-center">
+                            <input type="checkbox" id="outgoing_enabled" name="outgoing_enabled"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                                   checked>
+                            <label for="outgoing_enabled" class="ml-2 block text-sm text-gray-900">
+                                Enable Outgoing Messages
+                            </label>
+                        </div>
+                    {% else %}
+                        <div class="flex items-center text-gray-500">
+                            <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span class="text-sm">Outgoing Messages: Not Available</span>
+                        </div>
+                    {% endif %}
+
+                    <div class="flex space-x-4 pt-4">
+                        {% if has_test_connection %}
+                            <button type="button" 
+                                    class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                                    id="testConnectionBtn">
+                                Test Connection
+                            </button>
+                        {% endif %}
+                        <button type="submit" 
+                                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Create Service
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
 {% if has_test_connection %}
 <script>
 function testConnection() {
@@ -36,7 +183,26 @@ function testConnection() {
     });
 }
 
+// Initialize password toggles
+function initPasswordToggles() {
+    const toggles = document.querySelectorAll('.password-toggle');
+    toggles.forEach(toggle => {
+        toggle.addEventListener('click', function() {
+            const input = this.previousElementSibling;
+            const type = input.getAttribute('type') === 'password' ? 'text' : 'password';
+            input.setAttribute('type', type);
+            this.querySelector('svg').classList.toggle('hidden');
+            this.querySelector('svg').nextElementSibling.classList.toggle('hidden');
+        });
+    });
+}
+
+// Initialize everything when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
+    // Initialize password toggles
+    initPasswordToggles();
+    
+    // Initialize test connection button if it exists
     const testConnectionBtn = document.getElementById('testConnectionBtn');
     if (testConnectionBtn) {
         testConnectionBtn.addEventListener('click', testConnection);
@@ -44,88 +210,4 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 {% endif %}
-{% endblock %}
-
-{% block content %}
-<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-    <h1 class="text-2xl font-bold text-gray-900 mb-6">Add New Service</h1>
-
-    <form method="post" id="serviceForm" class="space-y-6">
-        {% csrf_token %}
-        
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Plugin</label>
-            <input type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" value="{{ plugin.friendly_name }}" readonly>
-            <input type="hidden" name="plugin" value="{{ plugin.name }}">
-        </div>
-
-        <div>
-            <label for="name" class="block text-sm font-medium text-gray-700">Instance Name</label>
-            <input type="text" id="name" name="name" required
-                   class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-        </div>
-
-        {% for field in config_fields %}
-            <div>
-                <label for="config_{{ field.name }}" class="block text-sm font-medium text-gray-700">
-                    {{ field.label }}
-                    {% if field.required %}<span class="text-red-500">*</span>{% endif %}
-                </label>
-
-                {% if field.type == 'string' or field.type == 'text' or field.type == 'password' %}
-                    <input type="{{ field.type }}" 
-                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                           id="config_{{ field.name }}" 
-                           name="config_{{ field.name }}" 
-                           {% if field.required %}required{% endif %}
-                           {% if field.default %}value="{{ field.default }}"{% endif %}>
-                {% elif field.type == 'integer' or field.type == 'number' %}
-                    <input type="number" 
-                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                           id="config_{{ field.name }}" 
-                           name="config_{{ field.name }}" 
-                           {% if field.required %}required{% endif %}
-                           {% if field.default %}value="{{ field.default }}"{% endif %}>
-                {% elif field.type == 'select' %}
-                    <select class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                            id="config_{{ field.name }}" 
-                            name="config_{{ field.name }}" 
-                            {% if field.required %}required{% endif %}>
-                        {% if field.options.0.value %}
-                            {% for option in field.options %}
-                                <option value="{{ option.value }}" {% if field.default == option.value %}selected{% endif %}>
-                                    {{ option.label }}
-                                </option>
-                            {% endfor %}
-                        {% else %}
-                            {% for option in field.options %}
-                                <option value="{{ option }}" {% if field.default == option %}selected{% endif %}>
-                                    {{ option }}
-                                </option>
-                            {% endfor %}
-                        {% endif %}
-                    </select>
-                {% endif %}
-            </div>
-        {% endfor %}
-
-        <div class="flex space-x-4">
-            {% if has_test_connection %}
-                <button type="button" 
-                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        id="testConnectionBtn">
-                    Test Connection
-                </button>
-            {% endif %}
-            <button type="submit" 
-                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                Save
-            </button>
-            <a href="{% url 'core:service_instance_list' %}" 
-               class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                Cancel
-            </a>
-        </div>
-    </form>
-</div>
 {% endblock %} 

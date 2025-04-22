@@ -1,47 +1,58 @@
 {
     "name": "smtp",
-    "friendly_name": "SMTP Plugin",
-    "description": "Raingull SMTP Plugin for sending emails. Serves as a template for outgoing plugins.",
-    "version": "0.1",
-    "incoming": false,
-    "outgoing": true,
-    "config_fields": [
-        {"name": "smtp_server", "type": "string", "label": "SMTP Server URL", "required": true},
-        {"name": "smtp_port", "type": "integer", "label": "SMTP Server Port", "default": 587, "required": true},
-        {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["None", "STARTTLS", "SSL/TLS"], "default": "STARTTLS", "required": true},
-        {"name": "username", "type": "string", "label": "SMTP Username", "required": true},
-        {"name": "password", "type": "password", "label": "SMTP Password", "required": true}
-    ],
-    "user_config_fields": [
-        {"name": "email_address", "type": "email", "label": "Email Address", "required": true}
-    ],
-    "message_schemas": {
-        "outgoing": {
-            "raingull_id": {"type": "UUIDField", "required": true, "unique": true},
-            "source_message_id": {"type": "CharField", "max_length": 255, "required": true},
-            "recipients": {"type": "JSONField", "required": true},
-            "subject": {"type": "CharField", "max_length": 255, "required": true},
-            "body": {"type": "TextField", "required": true},
-            "headers": {"type": "JSONField", "required": false},
-            "status": {"type": "CharField", "max_length": 20, "choices": ["formatted", "queued", "sending", "sent", "failed"], "default": "formatted"},
-            "created_at": {"type": "DateTimeField", "auto_now_add": true},
-            "sent_at": {"type": "DateTimeField", "required": false},
-            "error_message": {"type": "TextField", "required": false}
-        }
+    "friendly_name": "SMTP Email",
+    "version": "1.0",
+    "description": "SMTP email integration for sending messages via email servers",
+    "capabilities": {
+        "incoming": false,
+        "outgoing": true
     },
-    "translation_rules": {
-        "from_raingull": {
-            "recipients": "recipients",
-            "subject": "subject",
-            "body": "body",
-            "headers": "headers"
+    "formatting": {
+        "header_template": "**Email to {recipient}:**\n---\n",
+        "message_format": "markdown"
+    },
+    "config_schema": {
+        "host": {
+            "type": "string",
+            "required": true,
+            "help_text": "SMTP server hostname or IP address"
         },
-        "to_raingull": {
-            "sender": "sender",
-            "recipients": "recipients",
-            "subject": "subject",
-            "body": "body",
-            "headers": "headers"
+        "port": {
+            "type": "integer",
+            "required": true,
+            "default": 587,
+            "help_text": "SMTP server port (default: 587 for TLS)"
+        },
+        "username": {
+            "type": "string",
+            "required": true,
+            "help_text": "Email account username"
+        },
+        "password": {
+            "type": "password",
+            "required": true,
+            "help_text": "Email account password"
+        },
+        "use_tls": {
+            "type": "select",
+            "required": true,
+            "default": "STARTTLS",
+            "options": [
+                {"value": "none", "label": "None"},
+                {"value": "STARTTLS", "label": "STARTTLS"},
+                {"value": "TLS", "label": "TLS"}
+            ],
+            "help_text": "TLS mode for the connection"
+        },
+        "from_address": {
+            "type": "string",
+            "required": true,
+            "help_text": "Email address to send from"
+        },
+        "from_name": {
+            "type": "string",
+            "required": false,
+            "help_text": "Display name for the sender"
         }
     }
-}
+} 

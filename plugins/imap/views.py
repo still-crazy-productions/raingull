@@ -1,58 +1,32 @@
 import imaplib
 from django.http import JsonResponse
 
-def test_connection(request, data):
-    # Map the manifest field names to the expected field names
-    field_mapping = {
-        'host': 'imap_server',
-        'port': 'imap_port',
-        'username': 'username',
-        'password': 'password',
-        'encryption': 'encryption'
-    }
-    
-    # Convert the data to use the expected field names
-    converted_data = {}
-    for manifest_field, expected_field in field_mapping.items():
-        if manifest_field in data:
-            converted_data[expected_field] = data[manifest_field]
-        elif expected_field in data:
-            converted_data[expected_field] = data[expected_field]
-    
-    required_fields = ['imap_server', 'imap_port', 'username', 'password', 'encryption']
-    missing_fields = [f for f in required_fields if not converted_data.get(f)]
-    if missing_fields:
-        return JsonResponse({
-            "success": False,
-            "message": f"Missing fields: {', '.join(missing_fields)}"
-        })
-
-    server = converted_data['imap_server']
+def test_connection(request, config):
     try:
-        port = int(converted_data['imap_port'])
-    except ValueError:
-        return JsonResponse({
-            "success": False,
-            "message": "Invalid port number."
-        })
-
-    user = converted_data['username']
-    password = converted_data['password']
-    encryption = converted_data['encryption']
-
-    try:
-        if encryption == "SSL/TLS" or encryption == "ssl":
-            mail = imaplib.IMAP4_SSL(server, port)
+        # Connect to the IMAP server
+        if config.get('use_ssl') == 'TLS':
+            server = imaplib.IMAP4_SSL(config['host'], int(config['port']))
         else:
-            mail = imaplib.IMAP4(server, port)
-            if encryption == "STARTTLS" or encryption == "starttls":
-                mail.starttls()
+            server = imaplib.IMAP4(config['host'], int(config['port']))
+            if config.get('use_ssl') == 'STARTTLS':
+                server.starttls()
 
-        mail.login(user, password)
-        mail.logout()
-        return JsonResponse({"success": True, "message": "Connection successful."})
+        # Login and check capabilities
+        server.login(config['username'], config['password'])
+        
+        # Test folder access
+        folder = config.get('folder', 'INBOX')
+        server.select(folder)
+        
+        # Logout
+        server.logout()
 
-    except imaplib.IMAP4.error as e:
-        return JsonResponse({"success": False, "message": f"IMAP error: {e}"})
+        return JsonResponse({
+            'success': True,
+            'message': 'Successfully connected to IMAP server and accessed mailbox.'
+        })
     except Exception as e:
-        return JsonResponse({"success": False, "message": str(e)})
+        return JsonResponse({
+            'success': False,
+            'message': f'Failed to connect to IMAP server: {str(e)}'
+        }) 

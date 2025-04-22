@@ -1,37 +1,89 @@
 {
-  "name": "imap",
-  "friendly_name": "IMAP Plugin",
-  "description": "Raingull IMAP Plugin for receiving emails. Serves as a template for incoming plugins.",
-  "version": "0.1",
-  "incoming": true,
-  "outgoing": false,
-  "config_fields": [
-    {"name": "imap_server", "type": "string", "label": "IMAP Server URL", "required": true},
-    {"name": "imap_port", "type": "integer", "label": "IMAP Server Port", "default": 993, "required": true},
-    {"name": "encryption", "type": "select", "label": "Encryption Type", "options": ["SSL/TLS", "STARTTLS", "None"], "default": "SSL/TLS", "required": true},
-    {"name": "username", "type": "string", "label": "IMAP Username", "required": true},
-    {"name": "password", "type": "password", "label": "IMAP Password", "required": true},
-    {"name": "inbox_folder", "type": "string", "label": "Inbox Folder", "default": "INBOX", "required": true},
-    {"name": "processed_folder", "type": "string", "label": "Processed Folder", "default": "Processed", "required": true}
-  ],
-  "message_schemas": {
-    "incoming": {
-      "raingull_id": {"type": "UUIDField", "required": true},
-      "source_message_id": {"type": "CharField", "max_length": 255, "required": true},
-      "subject": {"type": "CharField", "max_length": 255, "required": true},
-      "sender": {"type": "CharField", "max_length": 255, "required": true},
-      "recipients": {"type": "JSONField", "required": true},
-      "date": {"type": "CharField", "max_length": 255, "required": true},
-      "body": {"type": "TextField", "required": true},
-      "headers": {"type": "JSONField", "required": false},
-      "status": {"type": "CharField", "max_length": 20, "required": true, "default": "new"},
-      "processed_at": {"type": "DateTimeField", "required": false}
+    "name": "imap",
+    "friendly_name": "IMAP Email",
+    "version": "1.0",
+    "description": "IMAP email integration for fetching messages from email servers",
+    "capabilities": {
+        "incoming_messages": true,
+        "outgoing_messages": false
+    },
+    "formatting": {
+        "header_template": "📧 Email from {{ from }}",
+        "message_format": "markdown"
+    },
+    "config_schema": {
+        "host": {
+            "type": "string",
+            "required": true,
+            "label": "IMAP Server",
+            "help_text": "The hostname of your IMAP server (e.g., imap.gmail.com)"
+        },
+        "port": {
+            "type": "integer",
+            "required": true,
+            "default": 993,
+            "label": "Port",
+            "help_text": "The port number for the IMAP server"
+        },
+        "username": {
+            "type": "string",
+            "required": true,
+            "label": "Username",
+            "help_text": "Your email address or username"
+        },
+        "password": {
+            "type": "password",
+            "required": true,
+            "label": "Password",
+            "help_text": "Your email password or app password"
+        },
+        "use_ssl": {
+            "type": "select",
+            "required": true,
+            "default": "TLS",
+            "label": "Security",
+            "help_text": "The security mode to use for the connection",
+            "options": [
+                {"value": "None", "label": "None"},
+                {"value": "STARTTLS", "label": "STARTTLS"},
+                {"value": "TLS", "label": "TLS"}
+            ]
+        },
+        "folder": {
+            "type": "string",
+            "required": false,
+            "default": "INBOX",
+            "label": "Source Folder",
+            "help_text": "The IMAP folder to monitor for new messages (default: INBOX)"
+        },
+        "processed_action": {
+            "type": "select",
+            "required": true,
+            "default": "move",
+            "label": "After Processing",
+            "help_text": "What to do with messages after they are processed",
+            "options": [
+                {"value": "move", "label": "Move to Processed Folder"},
+                {"value": "delete", "label": "Delete Messages"}
+            ]
+        },
+        "processed_folder": {
+            "type": "string",
+            "required": false,
+            "default": "INBOX/Processed",
+            "label": "Processed Folder",
+            "help_text": "Folder to move processed messages to (e.g., INBOX/Processed)",
+            "depends_on": {
+                "field": "processed_action",
+                "value": "move"
+            }
+        },
+        "fetch_interval": {
+            "type": "integer",
+            "required": false,
+            "default": 60,
+            "label": "Fetch Interval",
+            "help_text": "How often to check for new messages (in seconds)"
+        }
     }
-  },
-  "translation_rules": {
-    "sender": "sender",
-    "recipients": "recipients",
-    "subject": "subject",
-    "body": "body"
-  }
 }

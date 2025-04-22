@@ -1,1 +1,3 @@
-default_app_config = 'plugins.smtp.apps.SmtpConfig'
+from .plugin import SMTPPlugin
+
+__all__ = ['SMTPPlugin'] 

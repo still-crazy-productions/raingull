@@ -31,15 +31,11 @@ ALLOWED_HOSTS = []
 
 # Application definition
 
-# Get active plugin instances
-try:
-    from core.models import Service
-    PLUGIN_APPS = [s.app_config for s in Service.objects.filter(incoming_enabled=True) | Service.objects.filter(outgoing_enabled=True)]
-except:
-    PLUGIN_APPS = []
-
 # Custom user model
 AUTH_USER_MODEL = 'core.User'
+
+# Initialize with empty plugin apps list
+PLUGIN_APPS = []
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -52,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'users',
+    'raingull.apps.CeleryAppConfig',
 ] + PLUGIN_APPS
 
 MIDDLEWARE = [
@@ -159,19 +156,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'core.tasks.poll_incoming_services',
         'schedule': 30.0,  # Run every 30 seconds
     },
-    'process-incoming-messages': {
-        'task': 'core.tasks.process_incoming_messages',
-        'schedule': 30.0,  # Run every 30 seconds
-    },
     'distribute-outgoing-messages': {
         'task': 'core.tasks.distribute_outgoing_messages',
         'schedule': 30.0,  # Run every 30 seconds
     },
-    'process-outgoing-messages': {
-        'task': 'core.tasks.process_outgoing_messages',
-        'schedule': 30.0,  # Run every 30 seconds
-    },
 }
+
+# Service-specific tasks will be added dynamically when services are created
 
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = True  # Only for development
@@ -192,3 +183,42 @@ REST_FRAMEWORK = {
 MAX_MESSAGE_RETRIES = 5  # Maximum number of retry attempts for failed messages
 MIN_RETRY_DELAY = 2  # Minimum delay between retries in minutes
 MAX_RETRY_DELAY = 32  # Maximum delay between retries in minutes
+
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'raingull.log',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'core': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'celery': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+    },
+}

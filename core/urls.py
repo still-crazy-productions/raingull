@@ -1,10 +1,12 @@
 # core/urls.py
 from django.urls import path
 from . import views
+from django.views.generic import RedirectView
 
 app_name = 'core'
 
 urlpatterns = [
+    path('', RedirectView.as_view(url='/admin/')),
     path('services/', views.service_instance_list, name='service_instance_list'),
     path('services/get_plugin_fields/', views.get_plugin_fields, name='get_plugin_fields'),
     path('services/create/', views.create_service_instance, name='create_service_instance'),

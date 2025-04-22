@@ -1,9 +1,11 @@
 from celery import shared_task
 from django.utils import timezone
 from .models import Service, Message, AuditLog, MessageQueue, UserService, MessageDistribution
+from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.conf import settings
 from core.utils import get_imap_connection, get_smtp_connection
+from core.plugin_models import PluginModelLoader
 import logging
 import imaplib
 import smtplib
@@ -19,9 +21,14 @@ from redis import Redis
 from redis.lock import Lock
 import uuid
 from django.db.models import Q
+from django.db import models
 
 logger = logging.getLogger(__name__)
 redis_client = Redis(host='localhost', port=6379, db=0)
+
+def get_plugin_model(model_name):
+    """Get a plugin model by name using the PluginModelLoader"""
+    return PluginModelLoader.get_model(model_name)
 
 def log_audit(event_type, details, service_instance=None):
     """Helper function to create audit log entries"""
@@ -29,8 +36,7 @@ def log_audit(event_type, details, service_instance=None):
         AuditLog.objects.create(
             event_type=event_type,
             details=details,
-            service_instance=service_instance,
-            timestamp=timezone.now()
+            status='success'  # Default status
         )
     except Exception as e:
         logger.error(f"Error creating audit log entry: {str(e)}")
@@ -153,7 +159,7 @@ def poll_incoming_services():
         return None
 
 @shared_task
-def process_outgoing_messages():
+def process_outgoing_messages(service_id):
     """
     Step 4: Queue outgoing messages for delivery.
     This task:
@@ -166,132 +172,91 @@ def process_outgoing_messages():
     4. Skips queueing messages for the original sender
     """
     try:
-        # Get all service instances with outgoing enabled
-        service_instances = Service.objects.filter(
-            outgoing_enabled=True
-        )
+        service = Service.objects.get(id=service_id)
+        plugin = service.plugin
         
-        total_services = service_instances.count()
-        if total_services == 0:
+        # Get the outgoing model
+        model_name = f"{plugin.name}OutgoingMessage_{service_id}"
+        outgoing_model = get_plugin_model(model_name)
+        if not outgoing_model:
+            logger.error(f"Could not get outgoing model for service {service_id}")
+            return
+            
+        # Get all queued messages
+        queued_messages = outgoing_model.objects.filter(status='queued')
+        total_messages = queued_messages.count()
+        
+        if total_messages == 0:
             log_audit(
                 'outgoing_queue',
-                "Step 4: No active outgoing services configured",
-                None
+                f"Step 4: No queued messages to process for service {service.name}",
+                service
             )
             return None
             
-        # Log start of queueing cycle
+        # Log start of processing
         log_audit(
             'outgoing_queue',
-            f"Step 4: Starting queueing cycle for {total_services} outgoing service{'s' if total_services > 1 else ''}",
-            None
+            f"Step 4: Processing {total_messages} queued message{'s' if total_messages > 1 else ''} for service {service.name}",
+            service
         )
         
-        total_queued = 0
-        total_skipped = 0
-        for service_instance in service_instances:
+        processed_count = 0
+        for message in queued_messages:
             try:
-                # Get the outgoing message model
-                outgoing_model = service_instance.get_message_model('outgoing')
-                if not outgoing_model:
-                    error_msg = f"Step 4: Could not get outgoing message model for {service_instance.name}"
-                    logger.error(error_msg)
-                    log_audit('error', error_msg, service_instance)
+                # Get all active users for this service
+                active_users = UserService.objects.filter(
+                    service=service,
+                    is_active=True
+                ).select_related('user')
+                
+                # Skip if no active users
+                if not active_users.exists():
+                    logger.warning(f"Step 4: No active users found for service {service.name}")
                     continue
-                
-                # Get new messages
-                new_messages = outgoing_model.objects.filter(
-                    status='new'
-                )
-                
-                message_count = new_messages.count()
-                if message_count == 0:
-                    log_audit(
-                        'outgoing_queue',
-                        f"Step 4: No new messages to queue for {service_instance.name}",
-                        service_instance
-                    )
-                    continue
-                
-                # Log start of processing for this service
-                log_audit(
-                    'outgoing_queue',
-                    f"Step 4: Processing {message_count} new message{'s' if message_count > 1 else ''} for {service_instance.name}",
-                    service_instance
-                )
-                
-                for message in new_messages:
-                    try:
-                        # Get all active users for this service
-                        active_users = UserService.objects.filter(
-                            service_instance=service_instance,
-                            is_active=True
-                        ).select_related('user')
-                        
-                        users_queued = 0
-                        for user_activation in active_users:
-                            # Skip if this user is the original sender
-                            if user_activation.user.email == message.raingull_message.sender:
-                                skip_reason = (
-                                    f"Step 4: Message {message.raingull_id} skipped for user {user_activation.user.username} "
-                                    f"as they are the original sender (sender: {message.raingull_message.sender}, "
-                                    f"service: {service_instance.name})"
-                                )
-                                logger.info(skip_reason)
-                                log_audit(
-                                    'outgoing_queue',
-                                    skip_reason,
-                                    service_instance
-                                )
-                                total_skipped += 1
-                                continue
-                            
-                            # Create queue entry
-                            MessageQueue.objects.create(
-                                raingull_message=message.raingull_message,
-                                user=user_activation.user,
-                                service_instance=service_instance,
-                                status='queued'
-                            )
-                            users_queued += 1
-                            total_queued += 1
-                        
-                        # Update message status
-                        message.status = 'queued'
-                        message.save()
-                        
-                        log_audit(
-                            'outgoing_queue',
-                            f"Step 4: Queued message {message.raingull_id} for {users_queued} user{'s' if users_queued > 1 else ''} in {service_instance.name}",
-                            service_instance
-                        )
-                        
-                    except Exception as e:
-                        error_msg = f"Step 4: Error queueing message {message.raingull_id} for {service_instance.name}: {str(e)}"
-                        logger.error(error_msg)
-                        log_audit('error', error_msg, service_instance)
+                    
+                # Create queue entries for each user
+                for user_service in active_users:
+                    # Skip the original sender
+                    if message.sender == user_service.user.email:
                         continue
+                        
+                    # Create a queue entry
+                    MessageQueue.objects.create(
+                        message=message,
+                        user=user_service.user,
+                        service_instance=service,
+                        status='queued',
+                        scheduled_delivery_time=message.scheduled_delivery_time,
+                        is_urgent=message.is_urgent
+                    )
+                    
+                # Update message status
+                message.status = 'queued'
+                message.save()
+                
+                processed_count += 1
                 
             except Exception as e:
-                error_msg = f"Step 4: Error processing messages for {service_instance.name}: {str(e)}"
+                error_msg = f"Step 4: Error processing message {message.id} for service {service.name}: {str(e)}"
                 logger.error(error_msg)
-                log_audit('error', error_msg, service_instance)
+                log_audit('error', error_msg, service)
                 continue
-        
-        # Log final queueing summary
-        summary_msg = (
-            f"Step 4: Queueing complete - "
-            f"Queued: {total_queued}, "
-            f"Skipped: {total_skipped}, "
-            f"Total: {total_queued + total_skipped}"
-        )
-        logger.info(summary_msg)
+                
+        # Log processing results
         log_audit(
             'outgoing_queue',
-            summary_msg,
-            None
+            f"Step 4: Processed {processed_count} of {total_messages} messages for service {service.name}",
+            service
         )
         
+        return processed_count
+        
+    except Service.DoesNotExist:
+        error_msg = f"Step 4: Service {service_id} not found"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
+        return None
     except Exception as e:
         error_msg = f"Step 4: Error in process_outgoing_messages task: {str(e)}"
         logger.error(error_msg)
@@ -598,158 +563,83 @@ def send_queued_messages():
         return None
 
 @shared_task
-def process_incoming_messages():
+def process_incoming_messages(service_id):
     """
-    Step 2: Process and translate incoming messages from all service instances.
+    Step 2: Process incoming messages from service-specific tables.
     This task:
-    1. Checks all incoming service instances for new messages
-    2. Translates them based on the plugin manifest
-    3. Stores them in the standard Message table
-    4. Marks them for distribution in Step 3
+    1. Gets all new messages from the service's incoming table
+    2. Creates Message objects for each
+    3. Updates service-specific message status
     """
     try:
-        # Get all service instances with incoming enabled
-        service_instances = Service.objects.filter(
-            incoming_enabled=True
-        )
+        service = Service.objects.get(id=service_id)
+        plugin = service.plugin
         
-        total_services = service_instances.count()
-        if total_services == 0:
+        # Get the incoming model
+        model_name = f"{plugin.name}IncomingMessage_{service_id}"
+        incoming_model = get_plugin_model(model_name)
+        if not incoming_model:
+            logger.error(f"Could not get incoming model for service {service_id}")
+            return
+            
+        # Get all new messages
+        new_messages = incoming_model.objects.filter(status='new')
+        total_messages = new_messages.count()
+        
+        if total_messages == 0:
             log_audit(
                 'incoming_process',
-                "Step 2: No active incoming services configured",
-                None
+                f"Step 2: No new messages to process for service {service.name}",
+                service
             )
             return None
             
-        # Log start of processing cycle
+        # Log start of processing
         log_audit(
             'incoming_process',
-            f"Step 2: Starting processing cycle for {total_services} incoming service{'s' if total_services > 1 else ''}",
-            None
+            f"Step 2: Processing {total_messages} new message{'s' if total_messages > 1 else ''} for service {service.name}",
+            service
         )
         
-        total_processed = 0
-        for instance in service_instances:
+        processed_count = 0
+        for message in new_messages:
             try:
-                # Get the plugin instance
-                plugin = instance.get_plugin_instance()
-                if not plugin:
-                    logger.error(f"Step 2: Could not get plugin instance for {instance.name}")
-                    log_audit('error', f"Step 2: Could not get plugin instance for {instance.name}", instance)
-                    continue
-                
-                # Get the plugin's manifest
-                manifest = instance.plugin.get_manifest()
-                if not manifest:
-                    logger.error(f"Step 2: Could not get manifest for {instance.name}")
-                    log_audit('error', f"Step 2: Could not get manifest for {instance.name}", instance)
-                    continue
-                
-                # Get new messages from the service instance's model
-                message_model = instance.get_message_model('incoming')
-                if not message_model:
-                    logger.error(f"Step 2: Could not get message model for {instance.name}")
-                    log_audit('error', f"Step 2: Could not get message model for {instance.name}", instance)
-                    continue
-                
-                # Get new messages - no need to filter by service_instance since the table is already specific to this instance
-                new_messages = message_model.objects.filter(
-                    status='new'
+                # Create a Message object
+                message_obj = Message.objects.create(
+                    service=service,
+                    direction='in',
+                    status='received',
+                    content=message.content,
+                    metadata=message.metadata,
+                    received_at=message.received_at
                 )
                 
-                message_count = new_messages.count()
-                if message_count == 0:
-                    log_audit(
-                        'incoming_process',
-                        f"Step 2: No new messages to process in {instance.name}",
-                        instance
-                    )
-                    continue
-                    
-                log_audit(
-                    'incoming_process',
-                    f"Step 2: Processing {message_count} new message{'s' if message_count > 1 else ''} in {instance.name}",
-                    instance
-                )
+                # Update service-specific message status
+                message.status = 'processed'
+                message.save()
                 
-                messages_processed = 0
-                for message in new_messages:
-                    # Create a unique lock key for this message
-                    lock_key = f"process_message:{instance.id}:{message.raingull_id}"
-                    
-                    lock = Lock(redis_client, lock_key, timeout=60, blocking_timeout=1)
-                    try:
-                        if lock.acquire():
-                            # Check if message was already processed
-                            if Message.objects.filter(raingull_id=message.raingull_id).exists():
-                                # Mark the original message as processed
-                                message.status = 'processed'
-                                message.processed_at = timezone.now()
-                                message.save()
-                                continue
-                            
-                            # Create a new Raingull standard message
-                            standard_message = Message.create_standard_message(
-                                source_service=instance,
-                                source_message_id=message.source_message_id,
-                                subject=message.subject,
-                                body=message.body,
-                                sender=message.sender,
-                                recipients=message.recipients,
-                                date=parsedate_to_datetime(message.date),
-                                headers=message.headers if hasattr(message, 'headers') else {},
-                                raingull_id=message.raingull_id
-                            )
-                            
-                            # Mark the original message as processed
-                            message.status = 'processed'
-                            message.processed_at = timezone.now()
-                            message.save()
-                            
-                            messages_processed += 1
-                            total_processed += 1
-                        else:
-                            logger.warning(f"Step 2: Could not acquire lock for message {message.raingull_id}, skipping")
-                            continue
-                            
-                    except Exception as e:
-                        error_msg = f"Step 2: Error processing message from {instance.name}: {str(e)}"
-                        logger.error(error_msg)
-                        log_audit('error', error_msg, instance)
-                        continue
-                    finally:
-                        if lock.locked():
-                            lock.release()
-                
-                if messages_processed > 0:
-                    log_audit(
-                        'incoming_process',
-                        f"Step 2: Successfully processed {messages_processed} message{'s' if messages_processed > 1 else ''} from {instance.name}",
-                        instance
-                    )
+                processed_count += 1
                 
             except Exception as e:
-                error_msg = f"Step 2: Error processing messages from {instance.name}: {str(e)}"
+                error_msg = f"Step 2: Error processing message {message.id} for service {service.name}: {str(e)}"
                 logger.error(error_msg)
-                log_audit('error', error_msg, instance)
+                log_audit('error', error_msg, service)
                 continue
+                
+        # Log processing results
+        log_audit(
+            'incoming_process',
+            f"Step 2: Processed {processed_count} of {total_messages} messages for service {service.name}",
+            service
+        )
         
-        if total_processed > 0:
-            log_audit(
-                'incoming_process',
-                f"Step 2: Successfully processed {total_processed} message{'s' if total_processed > 1 else ''} across all services",
-                None
-            )
-        else:
-            log_audit(
-                'incoming_process',
-                "Step 2: No new messages to process across all services",
-                None
-            )
+        return processed_count
         
+    except Service.DoesNotExist:
+        error_msg = f"Step 2: Service {service_id} not found"
+        logger.error(error_msg)
+        log_audit('error', error_msg)
         return None
-        
     except Exception as e:
         error_msg = f"Step 2: Error in process_incoming_messages task: {str(e)}"
         logger.error(error_msg)
@@ -1192,4 +1082,20 @@ def distribute_messages():
             message.save()
             
     logger.info(f"Completed distribution of {total_messages} messages")
-    return f"Distributed {total_messages} messages" 
+    return f"Distributed {total_messages} messages"
+
+class UserDeliveryWindow(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    days_of_week = models.CharField(max_length=7)  # e.g., "MTWTFSS"
+    timezone = models.CharField(max_length=50)
+    is_global = models.BooleanField(default=True)
+
+class ServiceDeliveryWindow(models.Model):
+    user_service = models.ForeignKey(UserService, on_delete=models.CASCADE)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    days_of_week = models.CharField(max_length=7)
+    timezone = models.CharField(max_length=50)
+    override_global = models.BooleanField(default=False) 

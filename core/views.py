@@ -27,6 +27,7 @@ import uuid
 from django.urls import reverse
 from django.db import models
 from celery import shared_task
+from core.generate_models import generate_models_file
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +111,27 @@ def create_service_instance(request):
             messages.error(request, 'Could not load plugin manifest')
             return redirect('core:service_instance_list')
             
-        config_fields = manifest.get('config_fields', [])
-        print(f"Debug: Plugin {plugin.name} config fields: {config_fields}")  # Debug log
+        # Get config fields from the manifest's config_schema
+        config_schema = manifest.get('config_schema', {})
+        config_fields = []
         
+        # Convert the schema to a list of fields
+        for field_name, field_config in config_schema.items():
+            field = {
+                'name': field_name,
+                'label': field_config.get('label', field_name.title()),
+                'type': field_config.get('type', 'string'),
+                'required': field_config.get('required', False),
+                'default': field_config.get('default'),
+                'help_text': field_config.get('help_text'),
+            }
+            
+            # Handle select fields
+            if field_config.get('type') == 'select':
+                field['options'] = field_config.get('options', [])
+            
+            config_fields.append(field)
+            
         # Check if the plugin has a test connection function
         try:
             import_string(f'plugins.{plugin.name}.views.test_connection')
@@ -130,8 +149,8 @@ def create_service_instance(request):
             instance = Service(
                 plugin=plugin,
                 name=request.POST.get('name'),
-                incoming_enabled=manifest.get('incoming', False),
-                outgoing_enabled=manifest.get('outgoing', False)
+                incoming_enabled=manifest.get('capabilities', {}).get('incoming', False) or manifest.get('capabilities', {}).get('incoming_messages', False),
+                outgoing_enabled=manifest.get('capabilities', {}).get('outgoing', False) or manifest.get('capabilities', {}).get('outgoing_messages', False)
             )
             
             # Build config dictionary
@@ -143,26 +162,19 @@ def create_service_instance(request):
             instance.config = config
             instance.save()
             
-            messages.success(request, 'Service instance created successfully')
+            messages.success(request, 'Service instance created successfully.')
             return redirect('core:service_instance_list')
             
         except Exception as e:
             messages.error(request, f'Error creating service instance: {str(e)}')
             return redirect('core:service_instance_list')
     
-    context = {
+    return render(request, 'core/create_service_instance.html', {
         'plugin': plugin,
         'config_fields': config_fields,
         'manifest': manifest,
         'has_test_connection': has_test_connection
-    }
-    print(f"Debug: Context being passed to template: {context}")  # Debug log
-    
-    # Force template reloading
-    template = get_template('core/create_service_instance.html')
-    print(f"Debug: Template path: {template.origin.name}")
-    
-    return render(request, 'core/create_service_instance.html', context)
+    })
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -175,26 +187,34 @@ def manage_service_instance(request, instance_id=None):
     # Get configuration fields from manifest
     config_fields = []
     if manifest:
-        config_fields = manifest.get('config_fields', [])
-        # Add current values to the fields
-        for field in config_fields:
-            field['value'] = instance.config.get(field['name'], '')
+        config_schema = manifest.get('config_schema', {})
+        for field_name, field_config in config_schema.items():
+            field = {
+                'name': field_name,
+                'label': field_config.get('label', field_name.title()),
+                'type': field_config.get('type', 'string'),
+                'required': field_config.get('required', False),
+                'default': field_config.get('default'),
+                'help_text': field_config.get('help_text'),
+                'value': instance.config.get(field_name, '') if instance else ''
+            }
+            
+            # Handle select fields
+            if field_config.get('type') == 'select':
+                field['options'] = field_config.get('options', [])
+            
+            config_fields.append(field)
     
     # Check if the plugin has a test connection function
     has_test_connection = False
     if instance:
         try:
-            module_path = f'plugins.{instance.plugin.name}.views'
-            module = __import__(module_path, fromlist=['test_connection'])
-            has_test_connection = hasattr(module, 'test_connection')
-            print(f"Test connection available for {instance.plugin.name}: {has_test_connection}")
+            import_string(f'plugins.{instance.plugin.name}.views.test_connection')
+            has_test_connection = True
         except ImportError:
-            print(f"Error importing views for {instance.plugin.name}")
             has_test_connection = False
     
     if request.method == 'POST':
-        print("Form data:", request.POST)
-        # Handle the POST data directly
         if instance:
             instance.name = request.POST.get('name')
             instance.incoming_enabled = request.POST.get('incoming_enabled') == 'on'
@@ -202,9 +222,9 @@ def manage_service_instance(request, instance_id=None):
             
             # Update config
             config = {}
-            for key, value in request.POST.items():
-                if key.startswith('config_'):
-                    config[key[7:]] = value
+            for field in config_fields:
+                field_name = field['name']
+                config[field_name] = request.POST.get(f'config_{field_name}')
             instance.config = config
             
             instance.save()
@@ -236,10 +256,8 @@ def test_plugin_connection(request, plugin_name):
     
     try:
         # Import the test_connection function from the plugin's views
-        print(f"Importing views from plugins.{plugin.name}.views")
-        module_path = f'plugins.{plugin.name}.views'
-        module = __import__(module_path, fromlist=['test_connection'])
-        test_connection = getattr(module, 'test_connection')
+        print(f"Importing test_connection from plugins.{plugin.name}.views")
+        test_connection = import_string(f'plugins.{plugin.name}.views.test_connection')
         print("Found test_connection function")
         
         # Parse the JSON data from the request body
@@ -289,7 +307,7 @@ def test_plugin_connection(request, plugin_name):
                 'message': f'Error in test connection: {str(e)}'
             })
             
-    except (ImportError, AttributeError) as e:
+    except ImportError as e:
         print(f"Error loading test connection function: {str(e)}")
         return JsonResponse({
             'success': False,
@@ -851,26 +869,20 @@ def audit_log(request):
     
     # Get recent activity by type
     recent_activity = AuditLog.objects.filter(
-        timestamp__gte=twenty_four_hours_ago
+        created_at__gte=twenty_four_hours_ago
     ).values('event_type').annotate(count=Count('id')).order_by('-count')
-    
-    # Get service activity
-    service_activity = AuditLog.objects.filter(
-        timestamp__gte=twenty_four_hours_ago
-    ).values('service_instance__name').annotate(count=Count('id')).order_by('-count')
     
     # Get error count
     error_count = AuditLog.objects.filter(
-        timestamp__gte=twenty_four_hours_ago,
+        created_at__gte=twenty_four_hours_ago,
         status='error'
     ).count()
     
     # Get all audit logs
-    audit_logs = AuditLog.objects.select_related('service_instance').order_by('-timestamp')
+    audit_logs = AuditLog.objects.all().order_by('-created_at')
     
     return render(request, 'core/audit_log.html', {
         'recent_activity': recent_activity,
-        'service_activity': service_activity,
         'error_count': error_count,
         'audit_logs': audit_logs,
     })
@@ -959,9 +971,9 @@ def plugin_manager(request):
                         'friendly_name': manifest.get('friendly_name', plugin_name),
                         'description': manifest.get('description', 'No description available'),
                         'version': manifest.get('version', '1.0.0'),
-                        'incoming': manifest.get('incoming', False),
-                        'outgoing': manifest.get('outgoing', False),
-                        'enabled': plugin_name in installed_plugins,
+                        'incoming': manifest.get('capabilities', {}).get('incoming', False),
+                        'outgoing': manifest.get('capabilities', {}).get('outgoing', False),
+                        'enabled': plugin_name in installed_plugins and installed_plugins[plugin_name].enabled,
                         'plugin': installed_plugins.get(plugin_name)
                     }
                     available_plugins.append(plugin_info)
@@ -979,11 +991,16 @@ def plugin_manager(request):
                     # Find the plugin info for this plugin
                     plugin_info = next((p for p in available_plugins if p['name'] == plugin_name), None)
                     if plugin_info:
+                        manifest_path = os.path.join(plugins_dir, plugin_name, 'manifest.json')
+                        with open(manifest_path, 'r') as f:
+                            manifest = json.load(f)
+                            
                         Plugin.objects.create(
                             name=plugin_name,
                             friendly_name=plugin_info['friendly_name'],
                             version=plugin_info['version'],
-                            enabled=True
+                            enabled=True,
+                            manifest=manifest
                         )
                         messages.success(request, f'Plugin {plugin_name} enabled successfully.')
                 else:
@@ -997,6 +1014,13 @@ def plugin_manager(request):
                     plugin.enabled = False
                     plugin.save()
                     messages.success(request, f'Plugin {plugin_name} disabled successfully.')
+            
+            # Refresh installed plugins after the action
+            installed_plugins = {p.name: p for p in Plugin.objects.all()}
+            
+            # Update the enabled state in available_plugins
+            for plugin in available_plugins:
+                plugin['enabled'] = plugin['name'] in installed_plugins and installed_plugins[plugin['name']].enabled
             
             return redirect('core:plugin_manager')
 

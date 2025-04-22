@@ -8,12 +8,32 @@ import os
 from django.utils import timezone
 from django.apps import apps
 from django.conf import settings
-from .dynamic_models import create_dynamic_model, delete_dynamic_model
-import importlib
 import logging
-from django.db import connection
+import importlib
 
 logger = logging.getLogger(__name__)
+
+def get_plugin_models():
+    """Get all plugin models using the PluginModelLoader"""
+    from .plugin_models import PluginModelLoader  # Import here to avoid circular dependency
+    models = []
+    try:
+        from .models import Service
+        for service in Service.objects.all():
+            # Get incoming model
+            model_name = f"{service.plugin.name}IncomingMessage_{service.id}"
+            model = PluginModelLoader.get_model(model_name)
+            if model:
+                models.append(model)
+            
+            # Get outgoing model
+            model_name = f"{service.plugin.name}OutgoingMessage_{service.id}"
+            model = PluginModelLoader.get_model(model_name)
+            if model:
+                models.append(model)
+    except Exception as e:
+        logger.error(f"Error getting plugin models: {e}")
+    return models
 
 class User(AbstractUser):
     """Custom user model that extends Django's AbstractUser."""
@@ -25,6 +45,8 @@ class User(AbstractUser):
     timezone = models.CharField(max_length=50, default='UTC')
     mfa_enabled = models.BooleanField(default=False)
     mfa_secret = models.CharField(max_length=32, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     # Add related_name to avoid conflicts
     groups = models.ManyToManyField(
@@ -70,15 +92,17 @@ class User(AbstractUser):
         return service_instance.user == self
 
 class Plugin(models.Model):
+    """Plugin model for storing plugin information"""
     name = models.CharField(max_length=100, unique=True)
     friendly_name = models.CharField(max_length=100)
     version = models.CharField(max_length=20)
+    manifest = models.JSONField()
     enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.friendly_name} ({self.name})"
+        return f"{self.friendly_name} ({self.name}) v{self.version}"
 
     def get_manifest(self):
         try:
@@ -124,7 +148,7 @@ class Plugin(models.Model):
         return service_instance.app_config
 
     def get_message_model(self, service_instance, direction='incoming'):
-        """Get the dynamic message model for this plugin and service instance"""
+        """Get the message model for this plugin and service instance"""
         try:
             manifest = self.get_manifest()
             if not manifest:
@@ -137,27 +161,11 @@ class Plugin(models.Model):
                 logger.error(f"No {direction} message schema found in manifest for plugin {self.name}")
                 return None
 
-            # Create a unique model name and table name
-            model_name = f"{self.name}{direction.capitalize()}Message_{service_instance.id}"
-            table_name = f"{self.name}_{service_instance.id}_{direction[:1]}"  # e.g., imap_1_in
-
-            # Check if the model is already registered
-            try:
-                model = apps.get_model('core', model_name)
-                if model:
-                    logger.info(f"Found existing model {model_name}")
-                    return model
-            except LookupError:
-                # Model not found, create it
-                pass
-
-            # Create the model
-            logger.info(f"Creating model {model_name} for table {table_name}")
-            model = create_dynamic_model(model_name, schema, table_name, app_label='core')
-            return model
+            # Return the unified Message model
+            return Message
 
         except Exception as e:
-            logger.error(f"Error creating message model for {self.name}: {str(e)}")
+            logger.error(f"Error getting message model for {self.name}: {str(e)}")
             return None
 
     class Meta:
@@ -166,7 +174,8 @@ class Plugin(models.Model):
         verbose_name_plural = 'plugins'
 
 class Service(models.Model):
-    name = models.CharField(max_length=255)
+    """Service model for storing service configurations"""
+    name = models.CharField(max_length=100)
     plugin = models.ForeignKey(Plugin, on_delete=models.CASCADE)
     incoming_enabled = models.BooleanField(default=True)
     outgoing_enabled = models.BooleanField(default=True)
@@ -179,330 +188,138 @@ class Service(models.Model):
         db_table = 'core_services'
 
     def __str__(self):
-        return f"{self.name} ({self.plugin.friendly_name})"
+        return f"{self.name} ({self.plugin.name})"
 
     def get_config_value(self, key):
+        """Get a specific configuration value."""
         return self.config.get(key)
 
-    def get_message_model(self, direction):
-        return self.plugin.get_message_model(self, direction)
-
     def get_plugin_instance(self):
-        """Get an instance of the plugin class for this service"""
-        return self.plugin.get_plugin_instance(service_instance=self)
-
-    def save(self, *args, **kwargs):
-        # Get plugin capabilities from manifest
-        manifest = self.plugin.get_manifest()
-        if manifest:
-            # If plugin doesn't support outgoing, force outgoing_enabled to False
-            if not manifest.get('outgoing', False):
-                self.outgoing_enabled = False
-            # If plugin doesn't support incoming, force incoming_enabled to False
-            if not manifest.get('incoming', False):
-                self.incoming_enabled = False
-        super().save(*args, **kwargs)
-
-@receiver(post_save, sender=Service)
-def create_message_tables(sender, instance, created, **kwargs):
-    """
-    Creates dynamic tables for storing messages when a service is created.
-    Only creates tables if the service is newly created (created=True).
-    """
-    if not created:
-        return  # Only create tables for new services
-
-    try:
-        logger.info(f"Creating message tables for service {instance.name} (ID: {instance.id})")
-        manifest = instance.plugin.get_manifest()
-        if not manifest:
-            logger.error(f"No manifest found for plugin {instance.plugin.name}")
-            return
-
-        if 'message_schemas' not in manifest:
-            logger.error(f"No message schemas found in manifest for plugin {instance.plugin.name}")
-            return
-
-        def transform_field_definition(field_def):
-            """Transform manifest field definition into Django field parameters."""
-            transformed = field_def.copy()
-            if 'required' in transformed:
-                required = transformed.pop('required')
-                transformed['null'] = not required
-                transformed['blank'] = not required
-            return transformed
-
-        # Create incoming table if plugin supports incoming
-        if manifest.get('incoming', False):
-            incoming_schema = manifest['message_schemas'].get('incoming', {})
-            if incoming_schema:
-                model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-                table_name = f"{instance.plugin.name}_{instance.id}_in"  # e.g., imap_1_in
-                logger.info(f"Creating incoming message table {table_name}")
-                
-                # Transform all field definitions
-                transformed_schema = {
-                    field_name: transform_field_definition(field_def)
-                    for field_name, field_def in incoming_schema.items()
-                }
-                
-                # Add source_message_id field with unique constraint if not present
-                if 'source_message_id' not in transformed_schema:
-                    transformed_schema['source_message_id'] = {
-                        'type': 'CharField',
-                        'max_length': 255,
-                        'unique': True,
-                        'null': False,
-                        'blank': False,
-                        'help_text': 'Original message ID from the source system, used for troubleshooting'
-                    }
-                else:
-                    transformed_schema['source_message_id'].update({
-                        'unique': True,
-                        'null': False,
-                        'blank': False
-                    })
-                
-                # Create new table
-                create_dynamic_model(model_name, transformed_schema, table_name, app_label='core')
-                logger.info(f"Created new table {table_name}")
-        
-        # Create outgoing table if plugin supports outgoing
-        if manifest.get('outgoing', False):
-            outgoing_schema = manifest['message_schemas'].get('outgoing', {})
-            if outgoing_schema:
-                model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
-                table_name = f"{instance.plugin.name}_{instance.id}_out"  # e.g., imap_1_out
-                logger.info(f"Creating outgoing message table {table_name}")
-                
-                # Transform all field definitions
-                transformed_schema = {
-                    field_name: transform_field_definition(field_def)
-                    for field_name, field_def in outgoing_schema.items()
-                }
-                
-                # Add raingull_id field with unique constraint if not present
-                if 'raingull_id' not in transformed_schema:
-                    transformed_schema['raingull_id'] = {
-                        'type': 'UUIDField',
-                        'unique': True,
-                        'null': False,
-                        'blank': False,
-                        'help_text': 'Unique identifier for the message in Raingull system'
-                    }
-                else:
-                    transformed_schema['raingull_id'].update({
-                        'unique': True,
-                        'null': False,
-                        'blank': False
-                    })
-                
-                # Create new table
-                create_dynamic_model(model_name, transformed_schema, table_name, app_label='core')
-                logger.info(f"Created new table {table_name}")
-                
-    except Exception as e:
-        logger.error(f"Error creating message tables for {instance.name}: {str(e)}")
-        raise
-
-@receiver(post_delete, sender=Service)
-def delete_message_tables(sender, instance, **kwargs):
-    """
-    Deletes the dynamic tables when the service is deleted.
-    """
-    try:
-        logger.info(f"Deleting message tables for service {instance.name} (ID: {instance.id})")
-        manifest = instance.plugin.get_manifest()
-        if not manifest:
-            logger.error(f"No manifest found for plugin {instance.plugin.name}")
-            return
-
-        if 'message_schemas' not in manifest:
-            logger.error(f"No message schemas found in manifest for plugin {instance.plugin.name}")
-            return
-
-        # Delete incoming table if plugin supports incoming
-        if manifest.get('incoming', False):
-            model_name = f"{instance.plugin.name}IncomingMessage_{instance.id}"
-            table_name = f"{instance.plugin.name}_{instance.id}_in"
-            logger.info(f"Deleting incoming message table {table_name}")
-            delete_dynamic_model(model_name, table_name)
-        
-        # Delete outgoing table if plugin supports outgoing
-        if manifest.get('outgoing', False):
-            model_name = f"{instance.plugin.name}OutgoingMessage_{instance.id}"
-            table_name = f"{instance.plugin.name}_{instance.id}_out"
-            logger.info(f"Deleting outgoing message table {table_name}")
-            delete_dynamic_model(model_name, table_name)
-            
-    except Exception as e:
-        logger.error(f"Error deleting message tables for {instance.name}: {str(e)}")
-        raise
-
-@receiver(pre_delete, sender=Service)
-def pre_delete_service_instance(sender, instance, **kwargs):
-    """
-    Handles cleanup tasks that need to happen before the Service is deleted.
-    """
-    try:
-        # Log the deletion
-        logger.info(f"Deleting service instance {instance.name} (ID: {instance.id})")
-        
-        logger.info(f"Service instance {instance.name} cleanup completed")
-    except Exception as e:
-        logger.error(f"Error during pre-delete cleanup for {instance.name}: {e}")
+        """Get an instance of the plugin class."""
+        return self.plugin.get_plugin_instance(self)
 
 class Message(models.Model):
-    """Standardized message format for all incoming messages."""
-    raingull_id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    source_service = models.ForeignKey('Service', on_delete=models.CASCADE)
-    source_message_id = models.CharField(max_length=255)
-    subject = models.CharField(max_length=255)
-    body = models.TextField()
-    snippet = models.CharField(max_length=200, blank=True)  # First 200 chars of body
-    sender = models.CharField(max_length=255)
-    recipients = models.JSONField()
-    date = models.DateTimeField()
-    headers = models.JSONField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'core_messages'
-        indexes = [
-            models.Index(fields=['source_service', 'source_message_id']),
-            models.Index(fields=['date']),
-        ]
-
-    def __str__(self):
-        return f"{self.subject} ({self.sender})"
-
-    @classmethod
-    def create_standard_message(cls, source_service, source_message_id, subject, body, sender, recipients, date, headers, raingull_id):
-        """Create a new standard message."""
-        # Create snippet from first 200 chars of body
-        snippet = body[:200].strip()
-        
-        return cls.objects.create(
-            raingull_id=raingull_id,
-            source_service=source_service,
-            source_message_id=source_message_id,
-            subject=subject,
-            body=body,
-            snippet=snippet,
-            sender=sender,
-            recipients=recipients,
-            date=date,
-            headers=headers
-        )
-
-class UserService(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    service_instance = models.ForeignKey('Service', on_delete=models.CASCADE)
-    is_active = models.BooleanField(default=True)
-    config = models.JSONField(default=dict)  # Store user-specific config like email address
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ('user', 'service_instance')  # Each user can only activate a service instance once
-        db_table = 'core_user_services'
-
-    def __str__(self):
-        return f"{self.user.username} - {self.service_instance.name}"
-
-class MessageQueue(models.Model):
-    """
-    Queue for messages to be sent to specific users.
-    """
-    raingull_message = models.ForeignKey(
-        'Message',
-        on_delete=models.CASCADE,
-        related_name='queue_entries'
-    )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='message_queue'
-    )
-    service_instance = models.ForeignKey(
-        'Service',
-        on_delete=models.CASCADE,
-        related_name='message_queue'
+    """Unified message model for all messages in the system."""
+    raingull_id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
+    service = models.ForeignKey('Service', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
+    direction = models.CharField(
+        max_length=10, 
+        choices=[('incoming', 'Incoming'), ('outgoing', 'Outgoing')], 
+        db_index=True
     )
     status = models.CharField(
         max_length=20,
         choices=[
+            ('new', 'New'),
+            ('processed', 'Processed'),
+            ('formatted', 'Formatted'),
             ('queued', 'Queued'),
             ('sent', 'Sent'),
             ('failed', 'Failed')
         ],
-        default='queued'
+        default='new',
+        db_index=True
     )
-    error_message = models.TextField(
-        null=True,
-        blank=True
+    service_message_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    subject = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    sender = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    recipient = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    timestamp = models.DateTimeField(blank=True, null=True, db_index=True)
+    payload = models.JSONField(default=dict)
+    attachments = models.JSONField(default=list, blank=True)
+    retry_count = models.IntegerField(default=0)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    scheduled_delivery_time = models.DateTimeField(null=True, blank=True)
+    is_urgent = models.BooleanField(default=False)
+    source_service = models.ForeignKey('Service', on_delete=models.SET_NULL, null=True, blank=True, related_name='source_messages')
+
+    class Meta:
+        db_table = 'core_messages'
+        indexes = [
+            models.Index(fields=['service', 'direction', 'status']),
+            models.Index(fields=['timestamp']),
+            models.Index(fields=['service_message_id']),
+            models.Index(fields=['scheduled_delivery_time']),
+        ]
+
+    def __str__(self):
+        return f"{self.direction.title()} message via {self.service.name} [{self.status}]"
+
+    def increment_retry(self):
+        """Increment retry count and update last retry timestamp."""
+        self.retry_count += 1
+        self.last_retry_at = timezone.now()
+        self.save()
+
+class MessageQueue(models.Model):
+    """Queue for managing message processing"""
+    message = models.ForeignKey('Message', on_delete=models.CASCADE)
+    priority = models.IntegerField(default=0)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending'),
+            ('processing', 'Processing'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed')
+        ],
+        default='pending'
     )
-    created_at = models.DateTimeField(
-        auto_now_add=True
-    )
-    processed_at = models.DateTimeField(
-        null=True,
-        blank=True
-    )
-    retry_count = models.IntegerField(
-        default=0,
-        help_text="Number of times this message has been retried"
-    )
-    last_retry_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp of the last retry attempt"
-    )
+    retry_count = models.IntegerField(default=0)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'core_message_queue'
         indexes = [
-            models.Index(fields=['status']),
-            models.Index(fields=['created_at']),
-            models.Index(fields=['retry_count']),
-            models.Index(fields=['last_retry_at'])
+            models.Index(fields=['status', 'priority', 'created_at']),
         ]
 
     def __str__(self):
-        return f"Queue entry for {self.user.username} - {self.raingull_message.raingull_id}"
+        return f"Queue entry for {self.message}"
+
+    def increment_retry(self):
+        """Increment the retry count and update last_retry_at"""
+        self.retry_count += 1
+        self.last_retry_at = timezone.now()
+        self.save()
+
+class UserService(models.Model):
+    """User-specific service configuration."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    service = models.ForeignKey('Service', on_delete=models.CASCADE)
+    is_active = models.BooleanField(default=True)
+    config = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'service')
+        db_table = 'core_user_services'
+
+    def __str__(self):
+        return f"{self.user.username} - {self.service.name}"
 
 class AuditLog(models.Model):
-    EVENT_TYPE_CHOICES = [
-        ('info', 'Information'),
-        ('warning', 'Warning'),
-        ('error', 'Error'),
-        ('debug', 'Debug')
-    ]
-    
-    STATUS_CHOICES = [
-        ('success', 'Success'),
-        ('error', 'Error'),
-        ('warning', 'Warning')
-    ]
-    
-    timestamp = models.DateTimeField(auto_now_add=True)
-    service_instance = models.ForeignKey('Service', on_delete=models.SET_NULL, null=True)
-    event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    """Audit log model for tracking system events"""
+    event_type = models.CharField(max_length=50)
+    status = models.CharField(max_length=20)
     details = models.TextField()
-    
+    created_at = models.DateTimeField(auto_now_add=True)
+
     class Meta:
-        indexes = [
-            models.Index(fields=['timestamp']),
-            models.Index(fields=['service_instance']),
-            models.Index(fields=['event_type']),
-            models.Index(fields=['status']),
-        ]
-        ordering = ['-timestamp']
-    
+        db_table = 'core_audit_log'
+
     def __str__(self):
-        return f"{self.timestamp} - {self.event_type} - {self.status}"
+        return f"{self.event_type} - {self.status}"
 
 class ServiceMessageTemplate(models.Model):
     class MessageType(models.TextChoices):
@@ -562,44 +379,3 @@ class SystemMessageTemplate(models.Model):
         for key, value in kwargs.items():
             message = message.replace(f"{{{key}}}", str(value))
         return message
-
-class MessageDistribution(models.Model):
-    """
-    Tracks the distribution of messages to service-specific outgoing tables.
-    This is Step 3 in the message processing pipeline.
-    """
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),      # Initial state
-        ('formatted', 'Formatted'),  # Successfully translated and stored in service table
-        ('failed', 'Failed'),       # Translation or storage failed
-    ]
-    
-    message = models.ForeignKey('Message', on_delete=models.CASCADE)
-    service_instance = models.ForeignKey('Service', on_delete=models.CASCADE)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    error_message = models.TextField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        db_table = 'core_message_distribution'
-        indexes = [
-            models.Index(fields=['status']),
-            models.Index(fields=['message', 'service_instance'], name='message_service_idx'),
-            models.Index(fields=['created_at']),
-        ]
-        unique_together = [['message', 'service_instance']]  # Prevent duplicate distributions
-        
-    def __str__(self):
-        return f"{self.message.raingull_id} -> {self.service_instance.name} ({self.status})"
-        
-    def save(self, *args, **kwargs):
-        # Log status changes
-        if self.pk:  # If this is an update
-            old_status = MessageDistribution.objects.get(pk=self.pk).status
-            if old_status != self.status:
-                logger.info(
-                    f"Step 3: Message {self.message.raingull_id} distribution status changed from {old_status} to {self.status} "
-                    f"for service {self.service_instance.name}"
-                )
-        super().save(*args, **kwargs)

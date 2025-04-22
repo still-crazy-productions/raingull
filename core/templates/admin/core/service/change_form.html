@@ -1,0 +1,11 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls %}
+
+{% block submit_buttons_bottom %}
+    {{ block.super }}
+    {% if original %}
+        <div class="submit-row">
+            <input type="button" value="{% trans 'Reboot Raingull' %}" onclick="window.location.href='{% url 'reboot_raingull' %}'" />
+        </div>
+    {% endif %}
+{% endblock %} 
