@@ -12,9 +12,13 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 import os
 from pathlib import Path
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Add plugins directory to Python path
+sys.path.append(str(BASE_DIR / 'plugins'))
 
 
 # Quick-start development settings - unsuitable for production
@@ -150,14 +154,29 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+# Message Processing Pipeline Configuration
+ENABLE_MESSAGE_DELIVERY = True  # Set to True to enable steps 4 and 5 (message queuing and delivery)
+
 # Celery Beat Configuration
 CELERY_BEAT_SCHEDULE = {
     'poll-incoming-services': {
         'task': 'core.tasks.poll_incoming_services',
         'schedule': 30.0,  # Run every 30 seconds
     },
+    'process-incoming-messages': {
+        'task': 'core.tasks.process_incoming_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
     'distribute-outgoing-messages': {
         'task': 'core.tasks.distribute_outgoing_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+    'process-all-outgoing-messages': {
+        'task': 'core.tasks.process_all_outgoing_messages',
+        'schedule': 30.0,  # Run every 30 seconds
+    },
+    'send-all-queued-messages': {
+        'task': 'core.tasks.send_all_queued_messages',
         'schedule': 30.0,  # Run every 30 seconds
     },
 }
@@ -181,8 +200,16 @@ REST_FRAMEWORK = {
 
 # Message Processing Settings
 MAX_MESSAGE_RETRIES = 5  # Maximum number of retry attempts for failed messages
-MIN_RETRY_DELAY = 2  # Minimum delay between retries in minutes
-MAX_RETRY_DELAY = 32  # Maximum delay between retries in minutes
+MIN_RETRY_DELAY = 1  # Minimum delay between retries in minutes
+MAX_RETRY_DELAY = 15  # Maximum delay between retries in minutes
+MESSAGE_BATCH_SIZE = 100
+
+# Lock timeout settings (in seconds)
+LOCK_TIMEOUTS = {
+    'queue': 300,           # 5 minutes for message queuing
+    'service_polling': 60,  # 1 minute for service polling
+    'message_delivery': 300 # 5 minutes for message delivery
+}
 
 # Logging Configuration
 LOGGING = {
@@ -212,12 +239,12 @@ LOGGING = {
     'loggers': {
         'core': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',
+            'level': 'DEBUG',
             'propagate': True,
         },
         'celery': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',
+            'level': 'DEBUG',
             'propagate': True,
         },
     },

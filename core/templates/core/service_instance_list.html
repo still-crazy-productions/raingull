@@ -125,7 +125,7 @@
                             class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
                         <option value="">Choose a plugin...</option>
                         {% for plugin in plugins %}
-                            <option value="{{ plugin.name }}">{{ plugin.name }}</option>
+                            <option value="{{ plugin.name }}">{{ plugin.friendly_name }}</option>
                         {% endfor %}
                     </select>
                 </div>

@@ -4,8 +4,8 @@
     "version": "1.0",
     "description": "IMAP email integration for fetching messages from email servers",
     "capabilities": {
-        "incoming_messages": true,
-        "outgoing_messages": false
+        "incoming": true,
+        "outgoing": false
     },
     "formatting": {
         "header_template": "📧 Email from {{ from }}",
@@ -16,26 +16,26 @@
             "type": "string",
             "required": true,
             "label": "IMAP Server",
-            "help_text": "The hostname of your IMAP server (e.g., imap.gmail.com)"
+            "help_text": "IMAP server hostname or IP address"
         },
         "port": {
             "type": "integer",
             "required": true,
             "default": 993,
             "label": "Port",
-            "help_text": "The port number for the IMAP server"
+            "help_text": "IMAP server port (default: 993 for TLS)"
         },
         "username": {
             "type": "string",
-            "required": true,
+            "required": false,
             "label": "Username",
-            "help_text": "Your email address or username"
+            "help_text": "Email account username"
         },
         "password": {
             "type": "password",
-            "required": true,
+            "required": false,
             "label": "Password",
-            "help_text": "Your email password or app password"
+            "help_text": "Email account password"
         },
         "use_ssl": {
             "type": "select",

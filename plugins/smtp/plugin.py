@@ -2,33 +2,24 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import logging
 from pathlib import Path
 
-from core.plugin_base import BasePlugin
-from core.models import Message
+from core.models import PluginInterface, Message
 
 logger = logging.getLogger(__name__)
 
-class SMTPPlugin(BasePlugin):
+class SMTPPlugin(PluginInterface):
     """SMTP email plugin for sending messages via email servers."""
     
-    def __init__(self, config: Dict):
-        """Initialize the SMTP plugin with configuration.
+    def __init__(self, service):
+        """Initialize the SMTP plugin with a service instance.
         
         Args:
-            config: Plugin configuration dictionary containing:
-                - host: SMTP server hostname
-                - port: SMTP server port
-                - username: Email account username
-                - password: Email account password
-                - use_tls: Whether to use TLS
-                - from_address: Email address to send from
-                - from_name: Display name for the sender
-                - default_recipient: Default recipient email address
+            service: The service instance this plugin is associated with
         """
-        super().__init__(config)
+        super().__init__(service)
         self.connection = None
         self._load_manifest()
         
@@ -38,7 +29,7 @@ class SMTPPlugin(BasePlugin):
         with open(manifest_path) as f:
             self.manifest = json.load(f)
             
-    def get_manifest(self) -> Dict:
+    def _get_manifest(self) -> Dict:
         """Get the plugin manifest.
         
         Returns:
@@ -82,11 +73,11 @@ class SMTPPlugin(BasePlugin):
             finally:
                 self.connection = None
                 
-    def _create_email(self, message: Message, recipient: str) -> MIMEMultipart:
-        """Create an email message from a Message object.
+    def _create_email(self, message_payload: Dict[str, Any], recipient: str) -> MIMEMultipart:
+        """Create an email message from a message payload.
         
         Args:
-            message: Message object to convert to email
+            message_payload: Dictionary containing message data
             recipient: Email address of the recipient
             
         Returns:
@@ -96,13 +87,13 @@ class SMTPPlugin(BasePlugin):
         msg = MIMEMultipart('alternative')
         
         # Set headers
-        msg['Subject'] = message.metadata.get('subject', 'No subject')
+        msg['Subject'] = message_payload.get('subject', 'No subject')
         msg['From'] = f"{self.config.get('from_name', '')} <{self.config['from_address']}>"
         msg['To'] = recipient
         
         # Create the body of the message
-        text = message.content
-        html = f"<html><body><pre>{message.content}</pre></body></html>"
+        text = message_payload.get('content', '')
+        html = f"<html><body><pre>{text}</pre></body></html>"
         
         # Record the MIME types of both parts - text/plain and text/html
         part1 = MIMEText(text, 'plain')
@@ -114,11 +105,11 @@ class SMTPPlugin(BasePlugin):
         
         return msg
         
-    def send_message(self, message: Message) -> bool:
+    def _send_message(self, message_payload: Dict[str, Any]) -> bool:
         """Send a message via SMTP.
         
         Args:
-            message: Message to send
+            message_payload: Dictionary containing message data
             
         Returns:
             True if message was sent successfully, False otherwise
@@ -127,14 +118,14 @@ class SMTPPlugin(BasePlugin):
             self.connect()
             
         try:
-            # Get recipient from message metadata or use default
-            recipient = message.metadata.get('recipient', self.config.get('default_recipient'))
+            # Get recipient from message payload or use default
+            recipient = message_payload.get('to', self.config.get('default_recipient'))
             if not recipient:
                 logger.error("No recipient specified and no default recipient configured")
                 return False
                 
             # Create email message
-            email_msg = self._create_email(message, recipient)
+            email_msg = self._create_email(message_payload, recipient)
             
             # Send the message
             self.connection.send_message(email_msg)
@@ -145,7 +136,7 @@ class SMTPPlugin(BasePlugin):
             logger.error(f"Error sending message: {str(e)}")
             return False
             
-    def fetch_messages(self) -> List[Message]:
+    def _fetch_messages(self) -> List[Dict[str, Any]]:
         """SMTP plugin does not support fetching messages.
         
         Returns:
@@ -153,7 +144,7 @@ class SMTPPlugin(BasePlugin):
         """
         return []
         
-    def test_connection(self) -> bool:
+    def _test_connection(self) -> bool:
         """Test the connection to the SMTP server.
         
         Returns:
@@ -165,4 +156,78 @@ class SMTPPlugin(BasePlugin):
             return True
         except Exception as e:
             logger.error(f"Connection test failed: {str(e)}")
+            return False
+
+    def format_for_outgoing(self, message_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Format a Raingull message for outgoing delivery via SMTP.
+        
+        Args:
+            message_payload: The message payload to format
+            
+        Returns:
+            Dict containing the formatted message
+        """
+        # Get the message format from the manifest
+        manifest = self._get_manifest()
+        message_format = manifest.get('formatting', {}).get('message_format', 'text')
+        
+        # Format the content based on the message format
+        content = message_payload.get('content', '')
+        if message_format == 'markdown':
+            # TODO: Add markdown to HTML conversion if needed
+            pass
+            
+        # Add any attachments
+        attachments = message_payload.get('attachments', [])
+        
+        return {
+            'content': content,
+            'attachments': attachments,
+            'format': message_format,
+            'subject': message_payload.get('subject', ''),
+            'to': message_payload.get('recipient', ''),
+            'metadata': message_payload.get('metadata', {})
+        }
+
+    def translate_from_raingull(self, message: 'Message') -> Dict[str, Any]:
+        """Translate a Raingull message to SMTP format.
+        
+        Args:
+            message: The Raingull message to translate
+            
+        Returns:
+            Dict containing the translated message
+        """
+        return {
+            'content': message.payload.get('content', ''),
+            'subject': message.subject,
+            'to': message.recipient,
+            'attachments': message.attachments,
+            'metadata': message.payload.get('metadata', {})
+        }
+
+    def send(self, message: 'Message') -> bool:
+        """Send a message via SMTP.
+        
+        Args:
+            message: The message to send
+            
+        Returns:
+            True if message was sent successfully, False otherwise
+        """
+        try:
+            # Format the message for SMTP
+            message_payload = self.format_for_outgoing({
+                'content': message.payload.get('content', ''),
+                'subject': message.subject,
+                'recipient': message.recipient,
+                'attachments': message.attachments,
+                'metadata': message.payload.get('metadata', {})
+            })
+            
+            # Send the message
+            return self._send_message(message_payload)
+            
+        except Exception as e:
+            logger.error(f"Error sending message: {str(e)}")
             return False 

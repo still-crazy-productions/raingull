@@ -41,8 +41,9 @@ def service_instance_list(request):
     for instance in instances:
         manifest = instance.plugin.get_manifest()
         if manifest:
-            instance._supports_incoming = manifest.get('incoming', False)
-            instance._supports_outgoing = manifest.get('outgoing', False)
+            capabilities = manifest.get('capabilities', {})
+            instance._supports_incoming = capabilities.get('incoming', False) or capabilities.get('incoming_messages', False)
+            instance._supports_outgoing = capabilities.get('outgoing', False) or capabilities.get('outgoing_messages', False)
         else:
             instance._supports_incoming = False
             instance._supports_outgoing = False
@@ -67,14 +68,31 @@ def get_plugin_fields(request):
         with open(manifest_path, 'r') as f:
             manifest = json.load(f)
         
-        fields = manifest.get('user_config_fields', [])
+        # Format the fields from config_schema
+        fields = []
+        for field_name, field_config in manifest.get('config_schema', {}).items():
+            field = {
+                'name': field_name,
+                'type': field_config.get('type', 'string'),
+                'required': field_config.get('required', False),
+                'label': field_config.get('label', field_name.replace('_', ' ').title()),
+                'help_text': field_config.get('help_text', ''),
+                'value': field_config.get('default', ''),
+                'options': field_config.get('options', [])
+            }
+            fields.append(field)
         
         # Check if the plugin has a test connection function
         try:
-            import_string(f'plugins.{plugin.name}.views.test_connection')
+            try:
+                import_string(f'plugins.{plugin.name}.plugin.test_connection')
+            except ImportError:
+                import_string(f'plugins.{plugin.name}.views.test_connection')
             has_test_connection = True
+            logger.debug(f"Plugin {plugin.name} has test_connection function")
         except ImportError:
             has_test_connection = False
+            logger.debug(f"Plugin {plugin.name} does not have test_connection function")
             
         return JsonResponse({
             'fields': fields,
@@ -87,20 +105,21 @@ def get_plugin_fields(request):
 @user_passes_test(lambda u: u.is_superuser)
 def create_service_instance(request):
     # Get plugin from URL parameter
-    plugin_id = request.GET.get('plugin')
     plugin_name = request.GET.get('plugin_name')
     
-    if not plugin_id and not plugin_name:
+    logger.debug(f"Creating service instance for plugin_name={plugin_name}")
+    
+    if not plugin_name:
+        logger.error("No plugin_name provided in request")
         messages.error(request, 'No plugin specified')
         return redirect('core:service_instance_list')
     
     try:
-        # Try to get plugin by ID first, then by name
-        if plugin_id:
-            plugin = get_object_or_404(Plugin, id=plugin_id, enabled=True)
-        else:
-            plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
+        # Get plugin by name
+        plugin = get_object_or_404(Plugin, name=plugin_name, enabled=True)
+        logger.debug(f"Found plugin: {plugin.name} (enabled={plugin.enabled})")
     except Plugin.DoesNotExist:
+        logger.error(f"Plugin not found or not enabled: name={plugin_name}")
         messages.error(request, 'Plugin not found or not enabled')
         return redirect('core:service_instance_list')
     
@@ -108,71 +127,53 @@ def create_service_instance(request):
     try:
         manifest = plugin.get_manifest()
         if not manifest:
+            logger.error(f"Could not load manifest for plugin {plugin.name}")
             messages.error(request, 'Could not load plugin manifest')
             return redirect('core:service_instance_list')
             
+        logger.debug(f"Loaded manifest for plugin {plugin.name}: {manifest}")
+        
         # Get config fields from the manifest's config_schema
         config_schema = manifest.get('config_schema', {})
+        logger.debug(f"Config schema for plugin {plugin.name}: {config_schema}")
+        
         config_fields = []
         
         # Convert the schema to a list of fields
         for field_name, field_config in config_schema.items():
             field = {
                 'name': field_name,
-                'label': field_config.get('label', field_name.title()),
                 'type': field_config.get('type', 'string'),
                 'required': field_config.get('required', False),
-                'default': field_config.get('default'),
-                'help_text': field_config.get('help_text'),
+                'label': field_config.get('label', field_name.replace('_', ' ').title()),
+                'help_text': field_config.get('help_text', ''),
+                'value': field_config.get('default', ''),
+                'options': field_config.get('options', [])
             }
-            
-            # Handle select fields
-            if field_config.get('type') == 'select':
-                field['options'] = field_config.get('options', [])
-            
+            logger.debug(f"Processed field {field_name}: {field}")
             config_fields.append(field)
             
         # Check if the plugin has a test connection function
         try:
-            import_string(f'plugins.{plugin.name}.views.test_connection')
+            try:
+                import_string(f'plugins.{plugin.name}.plugin.test_connection')
+            except ImportError:
+                import_string(f'plugins.{plugin.name}.views.test_connection')
             has_test_connection = True
+            logger.debug(f"Plugin {plugin.name} has test_connection function")
         except ImportError:
             has_test_connection = False
+            logger.debug(f"Plugin {plugin.name} does not have test_connection function")
             
     except Exception as e:
+        logger.error(f"Error in create_service_instance for plugin {plugin_name}: {str(e)}", exc_info=True)
         messages.error(request, f'Error loading plugin manifest: {str(e)}')
         return redirect('core:service_instance_list')
     
-    if request.method == 'POST':
-        try:
-            # Create new service instance
-            instance = Service(
-                plugin=plugin,
-                name=request.POST.get('name'),
-                incoming_enabled=manifest.get('capabilities', {}).get('incoming', False) or manifest.get('capabilities', {}).get('incoming_messages', False),
-                outgoing_enabled=manifest.get('capabilities', {}).get('outgoing', False) or manifest.get('capabilities', {}).get('outgoing_messages', False)
-            )
-            
-            # Build config dictionary
-            config = {}
-            for field in config_fields:
-                field_name = field['name']
-                config[field_name] = request.POST.get(f'config_{field_name}')
-            
-            instance.config = config
-            instance.save()
-            
-            messages.success(request, 'Service instance created successfully.')
-            return redirect('core:service_instance_list')
-            
-        except Exception as e:
-            messages.error(request, f'Error creating service instance: {str(e)}')
-            return redirect('core:service_instance_list')
-    
     return render(request, 'core/create_service_instance.html', {
         'plugin': plugin,
-        'config_fields': config_fields,
         'manifest': manifest,
+        'config_fields': config_fields,
         'has_test_connection': has_test_connection
     })
 
@@ -209,7 +210,10 @@ def manage_service_instance(request, instance_id=None):
     has_test_connection = False
     if instance:
         try:
-            import_string(f'plugins.{instance.plugin.name}.views.test_connection')
+            try:
+                import_string(f'plugins.{instance.plugin.name}.plugin.test_connection')
+            except ImportError:
+                import_string(f'plugins.{instance.plugin.name}.views.test_connection')
             has_test_connection = True
         except ImportError:
             has_test_connection = False
@@ -256,8 +260,8 @@ def test_plugin_connection(request, plugin_name):
     
     try:
         # Import the test_connection function from the plugin's views
-        print(f"Importing test_connection from plugins.{plugin.name}.views")
-        test_connection = import_string(f'plugins.{plugin.name}.views.test_connection')
+        print(f"Importing test_connection from plugins.{plugin.name}.plugin")
+        test_connection = import_string(f'plugins.{plugin.name}.plugin.test_connection')
         print("Found test_connection function")
         
         # Parse the JSON data from the request body
@@ -393,13 +397,12 @@ def test_translate_messages(request, instance_id):
                 standard_message = Message.create_standard_message(
                     raingull_id=msg.raingull_id,
                     source_service=service_instance,
-                    source_message_id=msg.source_message_id,
+                    source_message_id=msg.service_message_id,
                     subject=msg.subject,
-                    body=msg.body,
                     sender=msg.sender,
-                    recipients=msg.recipients,
-                    date=parsedate_to_datetime(msg.date),
-                    headers=msg.headers if hasattr(msg, 'headers') else {}
+                    recipient=msg.recipient,
+                    timestamp=msg.timestamp,
+                    payload=msg.payload
                 )
                 
                 # Mark the original message as processed
@@ -573,28 +576,45 @@ def test_smtp_translate(request, instance_id):
 def get_service_config_fields(request, instance_id):
     """Get configuration fields for a service instance."""
     try:
-        print(f"Getting config fields for instance {instance_id}")
+        logger.debug(f"Getting config fields for instance {instance_id}")
         service_instance = Service.objects.get(id=instance_id)
-        print(f"Found service instance: {service_instance.name}")
+        logger.debug(f"Found service instance: {service_instance.name}")
         
         manifest = service_instance.plugin.get_manifest()
-        print(f"Manifest: {manifest}")
+        logger.debug(f"Manifest: {manifest}")
         
-        config_fields = manifest.get('user_config_fields', [])
-        print(f"User config fields: {config_fields}")
+        # Use user_config_schema instead of config_schema
+        config_schema = manifest.get('user_config_schema', {})
+        logger.debug(f"User config schema: {config_schema}")
+        
+        # Convert the schema to the format expected by the frontend
+        fields = []
+        for field_name, field_config in config_schema.items():
+            field = {
+                'name': field_name,
+                'type': field_config.get('type', 'string'),
+                'required': field_config.get('required', False),
+                'label': field_config.get('label', field_name.replace('_', ' ').title()),
+                'help_text': field_config.get('help_text', ''),
+                'value': field_config.get('default', ''),
+                'options': field_config.get('options', [])
+            }
+            fields.append(field)
+        
+        logger.debug(f"Processed fields: {fields}")
         
         return JsonResponse({
             'success': True,
-            'fields': config_fields
+            'fields': fields
         })
     except Service.DoesNotExist:
-        print(f"Service instance {instance_id} not found")
+        logger.error(f"Service instance {instance_id} not found")
         return JsonResponse({
             'success': False,
             'message': 'Service instance not found'
         })
     except Exception as e:
-        print(f"Error getting config fields: {str(e)}")
+        logger.error(f"Error getting config fields: {str(e)}")
         return JsonResponse({
             'success': False,
             'message': str(e)
@@ -628,7 +648,7 @@ def activate_service(request):
         # Get or create the activation
         activation, created = UserService.objects.get_or_create(
             user_id=user_id,
-            service_instance_id=service_instance_id,
+            service=service_instance,
             defaults={
                 'config': config,
                 'is_active': True
@@ -694,7 +714,7 @@ def queue_outgoing_messages(request, instance_id):
 
         # Get all active users for this service
         active_users = UserService.objects.filter(
-            service_instance=service_instance,
+            service=service_instance,
             is_active=True
         ).select_related('user')
 
@@ -717,10 +737,9 @@ def queue_outgoing_messages(request, instance_id):
                     
                     # Create queue entry
                     MessageQueue.objects.create(
-                        raingull_message=raingull_message,
+                        message=raingull_message,
                         user=activation.user,
-                        service_instance=service_instance,
-                        raingull_id=raingull_message.raingull_id,  # Use the raingull_id from the standard message
+                        service=service_instance,
                         status='queued'
                     )
                     queued_count += 1
@@ -758,7 +777,7 @@ def send_queued_messages(request):
         ).select_related(
             'raingull_message',
             'user',
-            'service_instance'
+            'service'
         )
         
         message_count = queued_messages.count()
@@ -773,9 +792,9 @@ def send_queued_messages(request):
         for message in queued_messages:
             try:
                 # Get the plugin instance
-                plugin = message.service_instance.get_plugin_instance()
+                plugin = message.service.get_plugin_instance()
                 if not plugin:
-                    error_msg = f"Could not get plugin instance for {message.service_instance.name}"
+                    error_msg = f"Could not get plugin instance for {message.service.name}"
                     logger.error(error_msg)
                     message.status = 'failed'
                     message.error_message = error_msg
@@ -786,11 +805,11 @@ def send_queued_messages(request):
                 try:
                     user_activation = UserService.objects.get(
                         user=message.user,
-                        service_instance=message.service_instance,
+                        service=message.service,
                         is_active=True
                     )
                 except UserService.DoesNotExist:
-                    error_msg = f"User {message.user.username} is not activated for service {message.service_instance.name}"
+                    error_msg = f"User {message.user.username} is not activated for service {message.service.name}"
                     logger.error(error_msg)
                     message.status = 'failed'
                     message.error_message = error_msg
@@ -798,9 +817,9 @@ def send_queued_messages(request):
                     continue
                 
                 # Get the service-specific message
-                outgoing_model = message.service_instance.get_message_model('outgoing')
+                outgoing_model = message.service.get_message_model('outgoing')
                 service_message = outgoing_model.objects.get(
-                    raingull_id=message.raingull_message.raingull_id
+                    raingull_id=message.raingull_id
                 )
                 
                 # Get the recipient email from the user's service activation
@@ -815,14 +834,14 @@ def send_queued_messages(request):
                 
                 # Prepare message data for sending
                 message_data = {
-                    'to': recipient_email,  # Use the email from user's service activation
+                    'to': recipient_email,
                     'subject': service_message.subject,
-                    'body': service_message.body,
-                    'headers': service_message.headers if hasattr(service_message, 'headers') else {}
+                    'body': service_message.payload.get('content', ''),
+                    'attachments': service_message.attachments
                 }
                 
                 # Send the message
-                success = plugin.send_message(message.service_instance, message_data)
+                success = plugin.send_message(message.service, message_data)
                 
                 # Update message status based on success
                 if success:
@@ -1082,7 +1101,7 @@ def invite_user(request):
             logger.debug("Creating UserService connection")
             user_service = UserService.objects.create(
                 user=user,
-                service_instance=service_instance,
+                service=service_instance,
                 is_active=False,
                 config=json.dumps({'email_address': email_address})  # Store as JSON string
             )
@@ -1105,7 +1124,7 @@ def invite_user(request):
                 recipient_email=email_address,
                 subject='Invitation to join Raingull',
                 body=f'You have been invited to join Raingull. Click the link below to activate your account:\n\n{activation_link}',
-                service_instance=service_instance,
+                service=service_instance,
                 status='queued'
             )
             
@@ -1120,15 +1139,14 @@ def invite_user(request):
     
     # GET request - show the form
     service_instances = Service.objects.filter(outgoing_enabled=True)
-    valid_instances = []
+    logger.debug(f"Found {service_instances.count()} service instances with outgoing enabled")
     
+    # Log details of each service instance
     for instance in service_instances:
-        plugin = instance.get_plugin_instance()
-        if plugin and plugin.manifest.get('outgoing', False):
-            valid_instances.append(instance)
+        logger.debug(f"Service instance: {instance.name} (ID: {instance.id}, Plugin: {instance.plugin.name}, Outgoing enabled: {instance.outgoing_enabled})")
     
     return render(request, 'core/invite_user.html', {
-        'service_instances': valid_instances
+        'service_instances': service_instances
     })
 
 def activate_user(request, token):
@@ -1187,7 +1205,7 @@ def process_service_messages():
         
         for message in queued_messages:
             try:
-                plugin = message.service_instance.get_plugin_instance()
+                plugin = message.service.get_plugin_instance()
                 if not plugin:
                     message.status = 'failed'
                     message.error_message = "Could not get plugin instance"
@@ -1195,7 +1213,7 @@ def process_service_messages():
                     continue
                 
                 # Send the message
-                success = plugin.send_message(message.service_instance, {
+                success = plugin.send_message(message.service, {
                     'to': message.recipient_email,
                     'subject': message.subject,
                     'body': message.body

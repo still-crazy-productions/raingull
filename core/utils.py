@@ -118,7 +118,7 @@ def discover_plugins():
                         'friendly_name': manifest['friendly_name'],
                         'version': manifest['version'],
                         'manifest': manifest,
-                        'enabled': manifest['name'] in existing_plugins
+                        'enabled': True  # Enable new plugins by default
                     }
                 )
 

@@ -10,30 +10,108 @@ from django.apps import apps
 from django.conf import settings
 import logging
 import importlib
+from core.plugin_base import BasePlugin
+from abc import abstractmethod
+from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
-def get_plugin_models():
-    """Get all plugin models using the PluginModelLoader"""
-    from .plugin_models import PluginModelLoader  # Import here to avoid circular dependency
-    models = []
-    try:
-        from .models import Service
-        for service in Service.objects.all():
-            # Get incoming model
-            model_name = f"{service.plugin.name}IncomingMessage_{service.id}"
-            model = PluginModelLoader.get_model(model_name)
-            if model:
-                models.append(model)
+class PluginInterface(BasePlugin):
+    """Interface class that extends BasePlugin with model-specific functionality.
+    
+    This class provides the connection between the abstract BasePlugin and the
+    concrete model implementations.
+    """
+    
+    def __init__(self, service: 'Service'):
+        """Initialize the plugin with a service instance.
+        
+        Args:
+            service (Service): The service instance this plugin is associated with
+        """
+        super().__init__(service)
+        self.config = service.config
+        
+    def get_manifest(self) -> Dict[str, Any]:
+        """Get the plugin manifest.
+        
+        Returns:
+            dict: The plugin manifest
+        """
+        return self._get_manifest()
+        
+    def fetch_messages(self) -> List[Dict[str, Any]]:
+        """Fetch messages from the service.
+        
+        Returns:
+            list: List of messages fetched from the service
+        """
+        return self._fetch_messages()
+        
+    def send_message(self, message: 'Message') -> bool:
+        """Send a message through the service.
+        
+        Args:
+            message (Message): The message to send
             
-            # Get outgoing model
-            model_name = f"{service.plugin.name}OutgoingMessage_{service.id}"
-            model = PluginModelLoader.get_model(model_name)
-            if model:
-                models.append(model)
-    except Exception as e:
-        logger.error(f"Error getting plugin models: {e}")
-    return models
+        Returns:
+            bool: True if the message was sent successfully, False otherwise
+        """
+        # Convert Message model to payload dict
+        message_payload = {
+            'content': message.payload.get('content', ''),
+            'attachments': message.payload.get('attachments', []),
+            'sender': message.sender,
+            'recipient': message.recipient,
+            'subject': message.subject,
+            'metadata': message.payload.get('metadata', {})
+        }
+        
+        # Format the message for outgoing delivery
+        formatted_payload = self.format_for_outgoing(message_payload)
+        
+        # Send the message
+        return self._send_message(formatted_payload)
+        
+    def test_connection(self) -> bool:
+        """Test the connection to the service.
+        
+        Returns:
+            bool: True if the connection is successful, False otherwise
+        """
+        return self._test_connection()
+        
+    @abstractmethod
+    def _get_manifest(self) -> Dict[str, Any]:
+        """Internal method to get the plugin manifest."""
+        pass
+        
+    @abstractmethod
+    def _fetch_messages(self) -> List[Dict[str, Any]]:
+        """Internal method to fetch messages."""
+        pass
+        
+    @abstractmethod
+    def _send_message(self, message_payload: Dict[str, Any]) -> bool:
+        """Internal method to send a message.
+        
+        Args:
+            message_payload (Dict): The message payload to send
+            
+        Returns:
+            bool: True if the message was sent successfully, False otherwise
+        """
+        pass
+        
+    @abstractmethod
+    def _test_connection(self) -> bool:
+        """Internal method to test the connection."""
+        pass
+
+def get_plugin_models():
+    """Get all plugin models"""
+    # Since we're using a unified Message model, we can just return Message
+    return [Message]
 
 class User(AbstractUser):
     """Custom user model that extends Django's AbstractUser."""
@@ -107,32 +185,78 @@ class Plugin(models.Model):
     def get_manifest(self):
         try:
             manifest_path = os.path.join(settings.BASE_DIR, 'plugins', self.name, 'manifest.json')
-            logger.info(f"Loading manifest from {manifest_path}")
+            logger.debug(f"Loading manifest from {manifest_path}")
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
-                logger.info(f"Successfully loaded manifest for plugin {self.name}: {manifest}")
+                logger.debug(f"Successfully loaded manifest for plugin {self.name}: {manifest}")
                 return manifest
         except Exception as e:
             logger.error(f"Error loading manifest for plugin {self.name}: {e}", exc_info=True)
             return None
 
     def get_plugin_class(self):
+        """Get the plugin class for this plugin.
+        
+        Returns:
+            The plugin class if found, None otherwise
+        """
         try:
-            module_path = f"plugins.{self.name}.plugin"
+            module_path = f'plugins.{self.name}.plugin'
+            logger.debug(f"Loading plugin class from {module_path}")
+            
+            # Check if the module exists
+            import importlib.util
+            spec = importlib.util.find_spec(module_path)
+            if spec is None:
+                logger.error(f"Module {module_path} not found in Python path")
+                return None
+                
+            logger.debug(f"Found module spec: {spec}")
+            
+            # Import the module
             module = importlib.import_module(module_path)
-            return module.Plugin
+            logger.debug(f"Imported module: {module}")
+            
+            # Look for a class that is a subclass of PluginInterface
+            plugin_class = None
+            for name, obj in module.__dict__.items():
+                if (isinstance(obj, type) and 
+                    issubclass(obj, PluginInterface) and 
+                    obj != PluginInterface and 
+                    obj.__module__ == module_path):
+                    plugin_class = obj
+                    logger.debug(f"Found plugin class {name} in {module_path}")
+                    break
+                    
+            if not plugin_class:
+                logger.error(f"No plugin class found in {module_path}")
+                return None
+                
+            # Verify the plugin class implements all required methods
+            required_methods = ['get_manifest', 'fetch_messages', 'send_message', 'test_connection']
+            missing_methods = [method for method in required_methods if not hasattr(plugin_class, method)]
+            if missing_methods:
+                logger.error(f"Plugin class {plugin_class.__name__} is missing required methods: {', '.join(missing_methods)}")
+                return None
+                
+            logger.debug(f"Successfully loaded plugin class {plugin_class.__name__}")
+            return plugin_class
+            
+        except ImportError as e:
+            logger.error(f"Error importing plugin module {module_path}: {str(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Error loading plugin class for {self.name}: {e}")
+            logger.error(f"Error loading plugin class: {str(e)}", exc_info=True)
             return None
 
     def get_plugin_instance(self, service_instance=None):
         try:
             plugin_class = self.get_plugin_class()
             if plugin_class:
-                return plugin_class(service_instance)
+                return plugin_class(service=service_instance)
             return None
         except Exception as e:
-            logger.error(f"Error creating plugin instance for {self.name}: {e}")
+            logger.error(f"Error getting plugin instance: {str(e)}")
             return None
 
     def get_service_config(self, service_instance):
@@ -195,8 +319,8 @@ class Service(models.Model):
         return self.config.get(key)
 
     def get_plugin_instance(self):
-        """Get an instance of the plugin class."""
-        return self.plugin.get_plugin_instance(self)
+        """Get an instance of the plugin for this service."""
+        return self.plugin.get_plugin_instance(service_instance=self)
 
 class Message(models.Model):
     """Unified message model for all messages in the system."""
@@ -235,9 +359,29 @@ class Message(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
-    scheduled_delivery_time = models.DateTimeField(null=True, blank=True)
     is_urgent = models.BooleanField(default=False)
     source_service = models.ForeignKey('Service', on_delete=models.SET_NULL, null=True, blank=True, related_name='source_messages')
+
+    # Processing step tracking
+    processing_step = models.CharField(
+        max_length=20,
+        choices=[
+            ('ingested', 'Ingested'),  # Step 1
+            ('standardized', 'Standardized'),  # Step 2
+            ('formatted', 'Formatted'),  # Step 3
+            ('queued', 'Queued'),  # Step 4
+            ('sent', 'Sent'),  # Step 5
+        ],
+        null=True,
+        blank=True,
+        help_text="Last processing step that handled this message"
+    )
+    
+    # Processing metrics
+    step_processing_time = models.JSONField(
+        default=dict,
+        help_text="Time spent in each processing step (in seconds)"
+    )
 
     class Meta:
         db_table = 'core_messages'
@@ -245,7 +389,6 @@ class Message(models.Model):
             models.Index(fields=['service', 'direction', 'status']),
             models.Index(fields=['timestamp']),
             models.Index(fields=['service_message_id']),
-            models.Index(fields=['scheduled_delivery_time']),
         ]
 
     def __str__(self):
@@ -260,6 +403,8 @@ class Message(models.Model):
 class MessageQueue(models.Model):
     """Queue for managing message processing"""
     message = models.ForeignKey('Message', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    service = models.ForeignKey('Service', on_delete=models.CASCADE)
     priority = models.IntegerField(default=0)
     status = models.CharField(
         max_length=20,

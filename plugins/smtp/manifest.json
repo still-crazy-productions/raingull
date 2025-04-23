@@ -25,12 +25,12 @@
         },
         "username": {
             "type": "string",
-            "required": true,
+            "required": false,
             "help_text": "Email account username"
         },
         "password": {
             "type": "password",
-            "required": true,
+            "required": false,
             "help_text": "Email account password"
         },
         "use_tls": {
@@ -53,6 +53,46 @@
             "type": "string",
             "required": false,
             "help_text": "Display name for the sender"
+        }
+    },
+    "user_config_schema": {
+        "email_address": {
+            "type": "email",
+            "required": true,
+            "label": "Email Address",
+            "help_text": "The email address where you will receive messages",
+            "default": ""
+        }
+    },
+    "message_schemas": {
+        "outgoing": {
+            "raingull_id": {"type": "UUIDField", "required": true, "unique": true},
+            "to": {"type": "EmailField", "max_length": 255, "required": true},
+            "source_message_id": {"type": "CharField", "max_length": 255, "required": true},
+            "recipients": {"type": "JSONField", "required": true},
+            "subject": {"type": "CharField", "max_length": 255, "required": true},
+            "body": {"type": "TextField", "required": true},
+            "headers": {"type": "JSONField", "required": false},
+            "status": {"type": "CharField", "max_length": 20, "choices": ["formatted", "queued", "sending", "sent", "failed"], "default": "formatted"},
+            "created_at": {"type": "DateTimeField", "auto_now_add": true},
+            "sent_at": {"type": "DateTimeField", "required": false},
+            "error_message": {"type": "TextField", "required": false}
+        }
+    },
+    "translation_rules": {
+        "from_raingull": {
+            "to": "recipients[0]",
+            "recipients": "recipients",
+            "subject": "subject",
+            "body": "body",
+            "headers": "headers"
+        },
+        "to_raingull": {
+            "sender": "sender",
+            "recipients": "recipients",
+            "subject": "subject",
+            "body": "body",
+            "headers": "headers"
         }
     }
 } 

@@ -7,123 +7,61 @@ The interface provides a standardized way for plugins to interact with the Raing
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any
-from django.utils import timezone
-from core.models import Message, Service
 import logging
 
 logger = logging.getLogger(__name__)
 
 class BasePlugin(ABC):
-    """
-    Base class for all Raingull plugins.
+    """Base class for all plugins.
     
-    This abstract base class defines the interface that all Raingull plugins must implement.
-    It provides default implementations for common functionality while requiring plugins
-    to implement service-specific behavior.
-    
-    Attributes:
-        service (Service): The service instance this plugin is associated with
-        config (Dict): The service configuration
+    This is an abstract base class that defines the interface that all plugins must implement.
     """
     
-    def __init__(self, service: Service):
-        """
-        Initialize the plugin with a service instance.
+    def __init__(self, service=None):
+        """Initialize the plugin with a service instance.
         
         Args:
-            service (Service): The service instance this plugin is associated with
+            service: The service instance this plugin is associated with
         """
         self.service = service
-        self.config = service.config
-
-    @abstractmethod
-    def get_manifest(self) -> Dict[str, Any]:
-        """
-        Return the plugin's manifest.
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
-        The manifest defines the plugin's capabilities, configuration schema,
-        and formatting preferences.
+    @abstractmethod
+    def get_manifest(self):
+        """Get the plugin manifest.
         
         Returns:
-            Dict containing the plugin manifest with the following structure:
-            {
-                "name": str,                    # Plugin identifier (e.g., "imap")
-                "friendly_name": str,           # Human-readable name (e.g., "IMAP Email")
-                "version": str,                 # Plugin version
-                "description": str,             # Plugin description
-                "capabilities": {
-                    "incoming": bool,           # Whether plugin supports incoming messages
-                    "outgoing": bool            # Whether plugin supports outgoing messages
-                },
-                "formatting": {
-                    "header_template": str,     # Template for message attribution
-                    "message_format": str       # Default message format (e.g., "markdown")
-                },
-                "config_schema": {              # Configuration field definitions
-                    "field_name": {
-                        "type": str,            # Field type (string, integer, boolean)
-                        "required": bool,       # Whether field is required
-                        "default": Any,         # Default value
-                        "help_text": str        # Field description
-                    }
-                }
-            }
+            dict: The plugin manifest
         """
         pass
-
-    @abstractmethod
-    def fetch_messages(self) -> List[Dict[str, Any]]:
-        """
-        Fetch new messages from the service.
         
-        This method should retrieve new messages from the service and return them
-        in a standardized format. The method is only called for plugins that support
-        incoming messages.
+    @abstractmethod
+    def fetch_messages(self):
+        """Fetch messages from the service.
         
         Returns:
-            List of message dictionaries with the following structure:
-            [{
-                "service_message_id": str,      # Original message ID from service
-                "subject": str,                 # Message subject
-                "sender": str,                  # Message sender
-                "recipient": str,               # Message recipient (if available)
-                "timestamp": datetime,          # Message timestamp
-                "payload": {                    # Message content and metadata
-                    "content": str,             # Message body
-                    "attachments": List,        # List of attachments
-                    "metadata": Dict           # Service-specific metadata
-                }
-            }]
+            list: List of messages fetched from the service
         """
         pass
-
-    @abstractmethod
-    def send_message(self, message: Message) -> bool:
-        """
-        Send a message through the service.
         
-        This method should send a message through the service and return whether
-        the operation was successful. The method is only called for plugins that
-        support outgoing messages.
+    @abstractmethod
+    def send_message(self, message):
+        """Send a message through the service.
         
         Args:
-            message (Message): The message to send
+            message: The message to send
             
         Returns:
-            bool: True if message was sent successfully, False otherwise
+            bool: True if the message was sent successfully, False otherwise
         """
         pass
-
-    @abstractmethod
-    def test_connection(self) -> bool:
-        """
-        Test the connection to the service.
         
-        This method should verify that the plugin can connect to the service
-        using the current configuration.
+    @abstractmethod
+    def test_connection(self):
+        """Test the connection to the service.
         
         Returns:
-            bool: True if connection was successful, False otherwise
+            bool: True if the connection is successful, False otherwise
         """
         pass
 
@@ -159,7 +97,7 @@ class BasePlugin(ABC):
             }
         }
 
-    def format_for_outgoing(self, message: Message) -> Dict[str, Any]:
+    def format_for_outgoing(self, message_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Format a Raingull message for outgoing delivery.
         
@@ -168,7 +106,7 @@ class BasePlugin(ABC):
         formatting logic.
         
         Args:
-            message (Message): The message to format
+            message_payload (Dict): The message payload to format
             
         Returns:
             Dict containing the formatted message with the following structure:
@@ -182,14 +120,14 @@ class BasePlugin(ABC):
         header_template = manifest.get('formatting', {}).get('header_template', '')
         
         # Add attribution header
-        content = message.payload.get('content', '')
+        content = message_payload.get('content', '')
         if header_template:
             content = header_template.format(
-                user=message.sender or 'Unknown User'
+                user=message_payload.get('sender', 'Unknown User')
             ) + content
 
         return {
             'content': content,
-            'attachments': message.payload.get('attachments', []),
+            'attachments': message_payload.get('attachments', []),
             'format': manifest.get('formatting', {}).get('message_format', 'text')
         } 
